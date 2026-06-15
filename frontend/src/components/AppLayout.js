@@ -1,0 +1,221 @@
+import { useEffect, useRef, useState } from "react";
+import { NavLink, useNavigate } from "react-router-dom";
+import "./AppLayout.css";
+
+function AppLayout({
+  children,
+  onLogout,
+  role = "",
+  cartCount = 0,
+  wishlistCount = 0,
+}) {
+  const navigate = useNavigate();
+
+  const normalizedRole = (
+    role ||
+    localStorage.getItem("userRole") ||
+    "buyer"
+  ).toLowerCase();
+
+  const isAdmin = normalizedRole === "admin";
+  const isSeller = normalizedRole === "seller";
+
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const sidebarRef = useRef(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event) => {
+      if (
+        sidebarRef.current &&
+        !sidebarRef.current.contains(event.target)
+      ) {
+        setSidebarOpen(false);
+      }
+    };
+
+    if (sidebarOpen) {
+      document.addEventListener("mousedown", handleClickOutside);
+    }
+
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [sidebarOpen]);
+
+  const closeSidebar = () => setSidebarOpen(false);
+
+  return (
+    <div className="app-shell">
+      {sidebarOpen && (
+        <div
+          className="sidebar-overlay"
+          onClick={() => setSidebarOpen(false)}
+        />
+      )}
+
+      <aside
+        ref={sidebarRef}
+        className={`sidebar ${sidebarOpen ? "sidebar-open" : ""}`}
+      >
+        <div className="brand-block">
+          <img
+            src="/Final%20App%20Logo.png"
+            alt="Daraz Market logo"
+            className="brand-logo"
+          />
+
+          <div>
+            <p className="brand-title">
+              {isAdmin
+                ? "Admin Panel"
+                : isSeller
+                ? "Seller Panel"
+                : "Marketplace"}
+            </p>
+
+            <p className="brand-subtitle">
+              {localStorage.getItem("username")}
+            </p>
+          </div>
+        </div>
+
+        <nav className="sidebar-nav">
+  <NavLink
+    to="/profile"
+    onClick={closeSidebar}
+    className={({ isActive }) =>
+      `sidebar-link${isActive ? " active" : ""}`
+    }
+  > 
+    Profile
+  </NavLink>
+
+  <button
+    className="sidebar-link sidebar-logout-link"
+    onClick={() => {
+      closeSidebar();
+      onLogout();
+    }}
+  >
+    Logout
+  </button>
+</nav>
+      </aside>
+
+      <div className="layout-main">
+        <header className="topbar">
+          <div className="topbar-left">
+            <button
+              type="button"
+              className="burger-btn"
+              onClick={() => setSidebarOpen(true)}
+            >
+              ☰
+            </button>
+
+            <div className="topbar-brand">
+              <img
+                src="/Final%20App%20Logo.png"
+                alt="Daraz Market logo"
+                className="brand-logo brand-logo--compact"
+              />
+
+              <div>
+                <p className="brand-title">
+                  {isAdmin
+                    ? "Admin Center"
+                    : isSeller
+                    ? "Seller Center"
+                    : "Marketplace"}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="topbar-actions">
+            {isAdmin && (
+              <>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => navigate("/dashboard")}
+                >
+                  Dashboard
+                </button>
+
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => navigate("/products")}
+                >
+                  Products
+                </button>
+              </>
+            )}
+
+            {isSeller && (
+              <>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => navigate("/seller-dashboard")}
+                >
+                  Dashboard
+                </button>
+
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => navigate("/marketplace")}
+                >
+                  Marketplace
+                </button>
+
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => navigate("/products")}
+                >
+                  My Products
+                </button>
+              </>
+            )}
+
+            {!isAdmin && !isSeller && (
+              <>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => navigate("/marketplace")}
+                >
+                  Home
+                </button>
+
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => navigate("/cart")}
+                >
+                  Cart ({cartCount})
+                </button>
+
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => navigate("/wishlist")}
+                >
+                  Wishlist ({wishlistCount})
+                </button>
+
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => navigate("/orders")}
+                >
+                  Orders
+                </button>
+              </>
+            )}
+          </div>
+        </header>
+
+        <main className="page-content">
+          {children}
+        </main>
+      </div>
+    </div>
+  );
+}
+
+export default AppLayout;

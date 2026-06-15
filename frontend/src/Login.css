@@ -1,0 +1,32 @@
+.auth-card {
+  display: grid;
+  gap: 18px;
+}
+
+.auth-header h1 {
+  font-size: 2.2rem;
+}
+
+.auth-header .subtext {
+  line-height: 1.75;
+  color: #64748b;
+}
+
+.auth-alert {
+  background: rgba(248, 113, 113, 0.14);
+  color: #b91c1c;
+}
+
+.auth-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.field-input {
+  outline: none;
+}
+
+.btn-secondary {
+  width: 100%;
+}
