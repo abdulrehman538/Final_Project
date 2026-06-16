@@ -430,7 +430,7 @@ select:focus {
 .market-grid {
   display: grid;
   gap: 24px;
-  grid-template-columns: 260px minmax(0, 1fr) 320px;
+  grid-template-columns: 260px minmax(0, 1fr);
   align-items: start;
 }
 

@@ -13,22 +13,22 @@
 .sidebar {
   position: fixed;
   top: 0;
-  left: -300px;
+  right: -300px;
   width: 280px;
   height: 100vh;
   background: #ffffff;
-  border-right: 1px solid #e5e7eb;
+  border-left: 1px solid #e5e7eb;
   padding: 24px;
   display: flex;
   flex-direction: column;
   gap: 24px;
-  transition: left 0.3s ease;
+  transition: right 0.3s ease;
   z-index: 1000;
   overflow-y: auto;
 }
 
 .sidebar-open {
-  left: 0;
+  right: 0;
 }
 
 .brand-block,
@@ -112,8 +112,8 @@
   background: white;
   border-radius: 20px;
   padding: 18px 24px;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
   align-items: center;
   gap: 20px;
   box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
@@ -143,7 +143,17 @@
 .topbar-actions {
   display: flex;
   gap: 10px;
+  justify-content: center;
   flex-wrap: wrap;
+  width: 100%;
+}
+
+.topbar-brand {
+  justify-self: start;
+}
+
+.burger-btn {
+  justify-self: end;
 }
 
 .page-content {

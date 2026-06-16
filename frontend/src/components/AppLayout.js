@@ -6,6 +6,7 @@ function AppLayout({
   children,
   onLogout,
   role = "",
+  isAuthenticated = false,
   cartCount = 0,
   wishlistCount = 0,
 }) {
@@ -13,7 +14,7 @@ function AppLayout({
 
   const normalizedRole = (
     role ||
-    localStorage.getItem("userRole") ||
+    (isAuthenticated ? localStorage.getItem("userRole") : "buyer") ||
     "buyer"
   ).toLowerCase();
 
@@ -60,19 +61,12 @@ function AppLayout({
         <div className="brand-block">
           <img
             src="/Final%20App%20Logo.png"
-            alt="Daraz Market logo"
+            alt="CArTGo logo"
             className="brand-logo"
           />
 
           <div>
-            <p className="brand-title">
-              {isAdmin
-                ? "Admin Panel"
-                : isSeller
-                ? "Seller Panel"
-                : "Marketplace"}
-            </p>
-
+            <p className="brand-title">CArTGo</p>
             <p className="brand-subtitle">
               {localStorage.getItem("username")}
             </p>
@@ -80,55 +74,65 @@ function AppLayout({
         </div>
 
         <nav className="sidebar-nav">
-  <NavLink
-    to="/profile"
-    onClick={closeSidebar}
-    className={({ isActive }) =>
-      `sidebar-link${isActive ? " active" : ""}`
-    }
-  > 
-    Profile
-  </NavLink>
+          {isAuthenticated ? (
+            <>
+              <NavLink
+                to="/profile"
+                onClick={closeSidebar}
+                className={({ isActive }) =>
+                  `sidebar-link${isActive ? " active" : ""}`
+                }
+              >
+                Profile
+              </NavLink>
 
-  <button
-    className="sidebar-link sidebar-logout-link"
-    onClick={() => {
-      closeSidebar();
-      onLogout();
-    }}
-  >
-    Logout
-  </button>
+              <button
+                className="sidebar-link sidebar-logout-link"
+                onClick={() => {
+                  closeSidebar();
+                  onLogout();
+                }}
+              >
+                Logout
+              </button>
+            </>
+          ) : (
+            <>
+              <button
+                className="sidebar-link"
+                onClick={() => {
+                  closeSidebar();
+                  navigate("/login");
+                }}
+              >
+                Sign In
+              </button>
+
+              <button
+                className="sidebar-link"
+                onClick={() => {
+                  closeSidebar();
+                  navigate("/register");
+                }}
+              >
+                Sign Up
+              </button>
+            </>
+          )}
 </nav>
       </aside>
 
       <div className="layout-main">
         <header className="topbar">
-          <div className="topbar-left">
-            <button
-              type="button"
-              className="burger-btn"
-              onClick={() => setSidebarOpen(true)}
-            >
-              ☰
-            </button>
+          <div className="topbar-brand">
+            <img
+              src="/Final%20App%20Logo.png"
+              alt="CArTGo logo"
+              className="brand-logo brand-logo--compact"
+            />
 
-            <div className="topbar-brand">
-              <img
-                src="/Final%20App%20Logo.png"
-                alt="Daraz Market logo"
-                className="brand-logo brand-logo--compact"
-              />
-
-              <div>
-                <p className="brand-title">
-                  {isAdmin
-                    ? "Admin Center"
-                    : isSeller
-                    ? "Seller Center"
-                    : "Marketplace"}
-                </p>
-              </div>
+            <div>
+              <p className="brand-title">CArTGo</p>
             </div>
           </div>
 
@@ -171,7 +175,7 @@ function AppLayout({
                   className="btn btn-ghost"
                   onClick={() => navigate("/products")}
                 >
-                  My Products
+                  My Store
                 </button>
               </>
             )}
@@ -185,29 +189,41 @@ function AppLayout({
                   Home
                 </button>
 
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => navigate("/cart")}
-                >
-                  Cart ({cartCount})
-                </button>
+                {isAuthenticated ? (
+                  <>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => navigate("/cart")}
+                    >
+                      Cart ({cartCount})
+                    </button>
 
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => navigate("/wishlist")}
-                >
-                  Wishlist ({wishlistCount})
-                </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => navigate("/wishlist")}
+                    >
+                      Wishlist ({wishlistCount})
+                    </button>
 
-                <button
-                  className="btn btn-ghost"
-                  onClick={() => navigate("/orders")}
-                >
-                  Orders
-                </button>
+                    <button
+                      className="btn btn-ghost"
+                      onClick={() => navigate("/orders")}
+                    >
+                      Orders
+                    </button>
+                  </>
+                ) : null}
               </>
             )}
           </div>
+
+          <button
+            type="button"
+            className="burger-btn"
+            onClick={() => setSidebarOpen(true)}
+          >
+            ☰
+          </button>
         </header>
 
         <main className="page-content">

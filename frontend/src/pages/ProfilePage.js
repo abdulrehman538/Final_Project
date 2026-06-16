@@ -17,6 +17,13 @@ function ProfilePage({ onBecomeSeller }) {
   const navigate = useNavigate();
   const token = localStorage.getItem("accessToken");
   const [profile, setProfile] = useState(emptyProfile);
+  const [addressFields, setAddressFields] = useState({
+    detail: "",
+    address1: "",
+    address2: "",
+    address3: "",
+    postal_code: "",
+  });
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sellerMode, setSellerMode] = useState(false);
@@ -43,6 +50,29 @@ function ProfilePage({ onBecomeSeller }) {
         const data = await response.json();
         setProfile((current) => ({ ...current, ...data, email: data.email || "" }));
         setSellerStoreName(data.store_name || "");
+
+        // Try parsing address JSON
+        try {
+          if (data.address) {
+            const parsed = JSON.parse(data.address);
+            setAddressFields({
+              detail: parsed.detail || "",
+              address1: parsed.address1 || "",
+              address2: parsed.address2 || "",
+              address3: parsed.address3 || "",
+              postal_code: parsed.postal_code || "",
+            });
+          }
+        } catch (e) {
+          // If address is not valid JSON (e.g. legacy text), load it into address1
+          setAddressFields({
+            detail: "",
+            address1: data.address || "",
+            address2: "",
+            address3: "",
+            postal_code: "",
+          });
+        }
       } catch {
         setProfile((current) => ({
           ...current,
@@ -67,6 +97,19 @@ function ProfilePage({ onBecomeSeller }) {
     setMessage("");
     setError("");
 
+    const addressJson = JSON.stringify({
+      detail: addressFields.detail,
+      address1: addressFields.address1,
+      address2: addressFields.address2,
+      address3: addressFields.address3,
+      postal_code: addressFields.postal_code,
+    });
+
+    const updatedProfile = {
+      ...profile,
+      address: addressJson,
+    };
+
     try {
       const response = await fetch("http://127.0.0.1:8000/api/profile/", {
         method: "PATCH",
@@ -74,7 +117,7 @@ function ProfilePage({ onBecomeSeller }) {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify(profile),
+        body: JSON.stringify(updatedProfile),
       });
 
       if (!response.ok) {
@@ -203,8 +246,53 @@ function ProfilePage({ onBecomeSeller }) {
           <label className="field-label">Phone</label>
           <input className="field-input" name="phone" value={profile.phone} onChange={handleChange} />
 
-          <label className="field-label">Address</label>
-          <input className="field-input" name="address" value={profile.address} onChange={handleChange} />
+          <label className="field-label">Address Line 1</label>
+          <input 
+            className="field-input" 
+            name="address1" 
+            placeholder="House/Apartment No, building name"
+            value={addressFields.address1} 
+            onChange={(e) => setAddressFields(prev => ({ ...prev, address1: e.target.value }))} 
+            required
+          />
+
+          <label className="field-label">Address Line 2</label>
+          <input 
+            className="field-input" 
+            name="address2" 
+            placeholder="Street, area, colony name"
+            value={addressFields.address2} 
+            onChange={(e) => setAddressFields(prev => ({ ...prev, address2: e.target.value }))} 
+          />
+
+          <label className="field-label">Address Line 3</label>
+          <input 
+            className="field-input" 
+            name="address3" 
+            placeholder="Landmark, city, state"
+            value={addressFields.address3} 
+            onChange={(e) => setAddressFields(prev => ({ ...prev, address3: e.target.value }))} 
+          />
+
+          <label className="field-label">Postal / Zip Code</label>
+          <input 
+            className="field-input" 
+            name="postal_code" 
+            placeholder="Enter postal / zip code"
+            value={addressFields.postal_code} 
+            onChange={(e) => setAddressFields(prev => ({ ...prev, postal_code: e.target.value }))} 
+            required
+          />
+
+          <label className="field-label">Detail / Special Instructions</label>
+          <textarea 
+            className="field-input" 
+            name="detail" 
+            placeholder="Additional delivery details or landmark"
+            rows="3"
+            value={addressFields.detail} 
+            onChange={(e) => setAddressFields(prev => ({ ...prev, detail: e.target.value }))} 
+          />
 
           <label className="field-label">Avatar URL</label>
           <input className="field-input" name="avatar_url" value={profile.avatar_url} onChange={handleChange} />

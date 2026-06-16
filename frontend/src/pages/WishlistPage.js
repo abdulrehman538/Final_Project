@@ -1,4 +1,7 @@
-function WishlistPage({ wishlist = [], onToggleWishlist, onAddToCart }) {
+import { useNavigate } from "react-router-dom";
+
+function WishlistPage({ wishlist = [], onToggleWishlist, onAddToCart, isAuthenticated = false }) {
+  const navigate = useNavigate();
   return (
     <div className="wishlist-page">
       <section className="card">
@@ -28,7 +31,11 @@ function WishlistPage({ wishlist = [], onToggleWishlist, onAddToCart }) {
                   <strong>{item.name}</strong>
                   <p className="subtext">${Number(item.price || 0).toFixed(2)}</p>
                   <div className="product-actions">
-                    <button type="button" className="btn btn-primary" onClick={() => onAddToCart(item)}>
+                    <button
+                      type="button"
+                      className="btn btn-primary"
+                      onClick={() => onAddToCart(item)}
+                    >
                       Add to Cart
                     </button>
                     <button type="button" className="btn btn-secondary" onClick={() => onToggleWishlist(item)}>

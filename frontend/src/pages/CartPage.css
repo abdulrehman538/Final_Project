@@ -1,0 +1,225 @@
+/* Modal Overlay styling */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(17, 24, 39, 0.65);
+  backdrop-filter: blur(8px);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+/* Modal box styling */
+.checkout-modal {
+  position: relative;
+  width: min(840px, 100%);
+  max-height: 90vh;
+  overflow-y: auto;
+  background: #ffffff;
+  padding: 40px !important;
+  border-radius: 32px !important;
+  box-shadow: var(--shadow-strong) !important;
+  animation: modalSlideIn 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+}
+
+.modal-close {
+  position: absolute;
+  top: 24px;
+  right: 24px;
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+  font-size: 1.5rem;
+  line-height: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  color: var(--muted);
+}
+
+.modal-close:hover {
+  background: var(--border);
+  color: var(--text);
+  transform: rotate(90deg);
+}
+
+.checkout-form {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.modal-header {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 16px;
+}
+
+.modal-header h2 {
+  margin: 4px 0 0;
+  font-size: 1.8rem;
+  letter-spacing: -0.02em;
+}
+
+.modal-body-grid {
+  display: grid;
+  grid-template-columns: 1.2fr 0.9fr;
+  gap: 32px;
+  align-items: start;
+}
+
+.shipping-section h4,
+.summary-payment-section h4 {
+  margin: 0 0 16px 0;
+  font-size: 1.1rem;
+  font-weight: 800;
+  color: var(--text);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 8px;
+}
+
+.address-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.checkout-summary-box {
+  background: var(--surface-soft);
+  border: 1px solid rgba(245, 114, 36, 0.12);
+  border-radius: 20px;
+  padding: 20px;
+  margin-bottom: 20px;
+}
+
+.summary-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 8px 0;
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+
+.summary-row.grand-total {
+  border-top: 1px dashed rgba(245, 114, 36, 0.24);
+  margin-top: 8px;
+  padding-top: 12px;
+  color: var(--text);
+  font-size: 1.2rem;
+}
+
+.payment-method-box {
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  padding: 16px;
+  margin-bottom: 24px;
+  transition: border-color 0.2s ease;
+}
+
+.payment-method-box:hover {
+  border-color: rgba(245, 114, 36, 0.3);
+}
+
+.cod-badge {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+}
+
+.cod-badge input[type="radio"] {
+  width: auto;
+  min-height: auto;
+  margin-top: 4px;
+  accent-color: var(--primary);
+  cursor: pointer;
+}
+
+.place-order-btn {
+  width: 100%;
+  padding: 14px !important;
+  font-size: 1.05rem;
+}
+
+/* Success State styling */
+.order-success-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  padding: 24px 0;
+}
+
+.success-icon {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--success);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 2.5rem;
+  font-weight: bold;
+  margin-bottom: 20px;
+  box-shadow: 0 8px 24px rgba(22, 163, 74, 0.24);
+  animation: scaleIn 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards;
+}
+
+.success-summary {
+  width: 100%;
+  max-width: 400px;
+  background: var(--bg);
+  border-radius: 20px;
+  padding: 20px;
+  margin: 24px 0;
+  text-align: left;
+  border: 1px solid var(--border);
+}
+
+.success-summary p {
+  margin: 8px 0;
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.95rem;
+}
+
+/* Animations */
+@keyframes modalSlideIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes scaleIn {
+  from {
+    opacity: 0;
+    transform: scale(0.5);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .modal-body-grid {
+    grid-template-columns: 1fr;
+    gap: 24px;
+  }
+  
+  .checkout-modal {
+    padding: 24px !important;
+  }
+}

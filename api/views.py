@@ -1,13 +1,16 @@
-from rest_framework import generics, parsers
+from rest_framework import generics, parsers, status
 from rest_framework.permissions import IsAuthenticated
-from django.contrib.auth.models import User
 from rest_framework.response import Response
+from django.contrib.auth.models import User
+from django.db import transaction
 
 from .models import (
     Product,
     ProductImage,
     UserProfile,
     ProductComment,
+    Order,
+    OrderItem,
 )
 
 from .serializers import (
@@ -15,8 +18,10 @@ from .serializers import (
     UserRegisterSerializer,
     UserProfileSerializer,
     ProductCommentSerializer,
+    OrderSerializer,
+    OrderItemSerializer,
+    ProductImageSerializer,
 )
-from .serializers import ProductImageSerializer
 
 from .permissions import (
     IsSellerOrAdminOrReadOnly,
@@ -28,6 +33,15 @@ from .permissions import (
 class RegisterView(generics.CreateAPIView):
     queryset = User.objects.all()
     serializer_class = UserRegisterSerializer
+
+
+class CheckUsernameView(generics.GenericAPIView):
+    def get(self, request):
+        username = request.query_params.get("username", "").strip()
+        if not username:
+            return Response({"available": False, "error": "No username provided."})
+        taken = User.objects.filter(username__iexact=username).exists()
+        return Response({"available": not taken})
 
 
 class UserRoleView(generics.GenericAPIView):
@@ -46,7 +60,7 @@ class UserRoleView(generics.GenericAPIView):
 class ProductListCreateView(generics.ListCreateAPIView):
     queryset = Product.objects.select_related("owner")
     serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticated, IsSellerOrAdminOrReadOnly]
+    permission_classes = [IsSellerOrAdminOrReadOnly]
 
     parser_classes = (
         parsers.MultiPartParser,
@@ -54,13 +68,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
     )
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        user = self.request.user
-
-        if is_seller(user) and not is_admin(user):
-            return queryset.filter(owner=user)
-
-        return queryset
+        return super().get_queryset()
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -83,7 +91,7 @@ class ProductListCreateView(generics.ListCreateAPIView):
 class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     queryset = Product.objects.select_related("owner")
     serializer_class = ProductSerializer
-    permission_classes = [IsAuthenticated, IsSellerOrAdminOrReadOnly]
+    permission_classes = [IsSellerOrAdminOrReadOnly]
 
     parser_classes = (
         parsers.MultiPartParser,
@@ -91,13 +99,7 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     )
 
     def get_queryset(self):
-        queryset = super().get_queryset()
-        user = self.request.user
-
-        if is_seller(user) and not is_admin(user):
-            return queryset.filter(owner=user)
-
-        return queryset
+        return super().get_queryset()
 
     def perform_update(self, serializer):
         product = serializer.save()
@@ -163,3 +165,127 @@ class ProductImageDetailView(generics.DestroyAPIView):
         obj.delete()
         from rest_framework import status
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CheckoutView(generics.GenericAPIView):
+    """
+    Handles cart checkout:
+    - Creates an Order with OrderItems
+    - Decreases product stock
+    - Validates stock availability
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = OrderSerializer
+
+    def post(self, request):
+        cart_items = request.data.get('items', [])
+        
+        if not cart_items:
+            return Response(
+                {'detail': 'Cart is empty'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                total_price = 0
+                order_items_data = []
+
+                # Validate all items have sufficient stock
+                for item in cart_items:
+                    product_id = item.get('product_id')
+                    quantity = item.get('quantity', 1)
+
+                    try:
+                        product = Product.objects.get(id=product_id)
+                    except Product.DoesNotExist:
+                        return Response(
+                            {'detail': f'Product {product_id} not found'},
+                            status=status.HTTP_404_NOT_FOUND
+                        )
+
+                    if product.stock < quantity:
+                        return Response(
+                            {'detail': f'Insufficient stock for {product.name}. Available: {product.stock}'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
+                    order_items_data.append({
+                        'product': product,
+                        'quantity': quantity,
+                        'price': product.price,
+                        'seller': product.owner,
+                    })
+
+                    total_price += float(product.price) * quantity
+
+                # Create order
+                order = Order.objects.create(
+                    buyer=request.user,
+                    status='completed',
+                    total_price=total_price
+                )
+
+                # Create order items and decrease stock
+                for item_data in order_items_data:
+                    product = item_data['product']
+                    quantity = item_data['quantity']
+
+                    OrderItem.objects.create(
+                        order=order,
+                        product=product,
+                        quantity=quantity,
+                        price=item_data['price'],
+                        seller=product.owner
+                    )
+
+                    # Decrease product stock
+                    product.stock -= quantity
+                    product.save(update_fields=['stock'])
+
+                serializer = self.get_serializer(order)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response(
+                {'detail': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+
+class OrderListView(generics.ListAPIView):
+    """Get all orders for the authenticated user (buyer)"""
+    serializer_class = OrderSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Order.objects.filter(buyer=self.request.user).prefetch_related('items')
+
+
+class SellerOrdersView(generics.ListAPIView):
+    """Get all orders containing items sold by the authenticated seller"""
+    serializer_class = OrderSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Only sellers can use this endpoint
+        if not is_seller(self.request.user):
+            return Order.objects.none()
+
+        # Get all orders that contain items sold by this seller
+        return Order.objects.filter(
+            items__seller=self.request.user
+        ).distinct().prefetch_related('items')
+
+
+class SellerProductsView(generics.ListAPIView):
+    """Get all products created by the authenticated seller"""
+    serializer_class = ProductSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        # Only sellers can access their own products
+        if not is_seller(self.request.user):
+            return Product.objects.none()
+
+        return Product.objects.filter(owner=self.request.user).select_related("owner")

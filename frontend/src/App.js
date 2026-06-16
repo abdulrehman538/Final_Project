@@ -1,5 +1,5 @@
 ﻿import { useEffect, useState } from "react";
-import { Routes, Route, Navigate } from "react-router-dom";
+import { Routes, Route, Navigate, useNavigate } from "react-router-dom";
 
 import SellerDashboard from "./pages/SellerDashboard";
 import AuthPage from "./pages/AuthPage";
@@ -12,6 +12,7 @@ import OrdersPage from "./pages/OrdersPage";
 import ProfilePage from "./pages/ProfilePage";
 import ProductCrud from "./ProductCrud";
 import AppLayout from "./components/AppLayout";
+import GuestAuthModal from "./components/GuestAuthModal";
 import "./App.css";
 
 const loadJSON = (key, fallback) => {
@@ -32,6 +33,7 @@ function App() {
 
   const [cart, setCart] = useState(() => loadJSON("cartItems", []));
   const [wishlist, setWishlist] = useState(() => loadJSON("wishlistItems", []));
+  const [showGuestAuthModal, setShowGuestAuthModal] = useState(false);
 
   useEffect(() => {
     if (auth.token) {
@@ -69,6 +71,9 @@ function App() {
     });
   };
 
+  const isAuthenticated = Boolean(auth.token);
+  const isGuest = !isAuthenticated;
+
   const handleLogout = () => {
     setAuth({ token: null, role: "buyer", username: "" });
   };
@@ -81,7 +86,14 @@ function App() {
     }
   };
 
+  const navigate = useNavigate();
+
   const addToCart = (product, quantity = 1) => {
+    if (!auth.token) {
+      setShowGuestAuthModal(true);
+      return;
+    }
+
     setCart((current) => {
       const existing = current.find((item) => item.id === product.id);
 
@@ -130,7 +142,7 @@ function App() {
     allowedRoles = [],
   }) => {
     if (!auth.token) {
-      return <Navigate to="/" replace />;
+      return <Navigate to="/login" replace />;
     }
 
     if (!allowedRoles || allowedRoles.length === 0) {
@@ -153,9 +165,30 @@ function App() {
   };
 
   return (
-    <Routes>
+    <>
+      <Routes>
+        <Route
+          path="/"
+          element={
+            auth.token ? (
+              <Navigate
+                to={
+                  auth.role === "admin"
+                    ? "/dashboard"
+                    : auth.role === "seller"
+                    ? "/seller-dashboard"
+                    : "/marketplace"
+                }
+                replace
+              />
+            ) : (
+              <Navigate to="/marketplace" replace />
+            )
+          }
+        />
+
       <Route
-        path="/"
+        path="/login"
         element={<AuthPage onLogin={handleLogin} />}
       />
 
@@ -216,99 +249,98 @@ function App() {
       <Route
         path="/marketplace"
         element={
-          <ProtectedRoute allowedRoles={["buyer", "seller"]}>
-            <AppLayout
-              role={auth.role}
-              title="Marketplace"
-              onLogout={handleLogout}
-              cartCount={cart.reduce(
-                (sum, item) => sum + item.quantity,
-                0
-              )}
-              wishlistCount={wishlist.length}
-            >
-              <Marketplace
-                onAddToCart={addToCart}
-                onToggleWishlist={toggleWishlist}
-                wishlist={wishlist}
-                cart={cart}
-              />
-            </AppLayout>
-          </ProtectedRoute>
+          <AppLayout
+            role={auth.role}
+            isAuthenticated={isAuthenticated}
+            title="Marketplace"
+            onLogout={handleLogout}
+            cartCount={cart.reduce(
+              (sum, item) => sum + item.quantity,
+              0
+            )}
+            wishlistCount={wishlist.length}
+          >
+            <Marketplace
+              onAddToCart={addToCart}
+              onToggleWishlist={toggleWishlist}
+              wishlist={wishlist}
+              cart={cart}
+              isAuthenticated={isAuthenticated}
+            />
+          </AppLayout>
         }
       />
 
       <Route
         path="/product/:id"
         element={
-          <ProtectedRoute allowedRoles={["buyer", "seller"]}>
-            <AppLayout
-              role={auth.role}
-              title="Product Details"
-              onLogout={handleLogout}
-              cartCount={cart.reduce(
-                (sum, item) => sum + item.quantity,
-                0
-              )}
-              wishlistCount={wishlist.length}
-            >
-              <ProductDetail
-                cart={cart}
-                wishlist={wishlist}
-                onAddToCart={addToCart}
-                onToggleWishlist={toggleWishlist}
-              />
-            </AppLayout>
-          </ProtectedRoute>
+          <AppLayout
+            role={auth.role}
+            isAuthenticated={isAuthenticated}
+            title="Product Details"
+            onLogout={handleLogout}
+            cartCount={cart.reduce(
+              (sum, item) => sum + item.quantity,
+              0
+            )}
+            wishlistCount={wishlist.length}
+          >
+            <ProductDetail
+              cart={cart}
+              wishlist={wishlist}
+              onAddToCart={addToCart}
+              onToggleWishlist={toggleWishlist}
+              isAuthenticated={isAuthenticated}
+            />
+          </AppLayout>
         }
       />
 
       <Route
         path="/cart"
         element={
-          <ProtectedRoute allowedRoles={["buyer", "seller"]}>
-            <AppLayout
-              role={auth.role}
-              title="Cart"
-              onLogout={handleLogout}
-              cartCount={cart.reduce(
-                (sum, item) => sum + item.quantity,
-                0
-              )}
-              wishlistCount={wishlist.length}
-            >
-              <CartPage
-                cart={cart}
-                onUpdateQuantity={updateCartQuantity}
-                onRemoveItem={removeFromCart}
-                onClearCart={clearCart}
-              />
-            </AppLayout>
-          </ProtectedRoute>
+          <AppLayout
+            role={auth.role}
+            isAuthenticated={isAuthenticated}
+            title="Cart"
+            onLogout={handleLogout}
+            cartCount={cart.reduce(
+              (sum, item) => sum + item.quantity,
+              0
+            )}
+            wishlistCount={wishlist.length}
+          >
+            <CartPage
+              cart={cart}
+              onUpdateQuantity={updateCartQuantity}
+              onRemoveItem={removeFromCart}
+              onClearCart={clearCart}
+            />
+          </AppLayout>
         }
       />
 
       <Route
         path="/wishlist"
         element={
-          <ProtectedRoute allowedRoles={["buyer", "seller"]}>
-            <AppLayout
-              role={auth.role}
-              title="Wishlist"
-              onLogout={handleLogout}
-              cartCount={cart.reduce(
-                (sum, item) => sum + item.quantity,
-                0
-              )}
-              wishlistCount={wishlist.length}
-            >
-              <WishlistPage
-                wishlist={wishlist}
-                onToggleWishlist={toggleWishlist}
-                onAddToCart={addToCart}
-              />
-            </AppLayout>
-          </ProtectedRoute>
+          <AppLayout
+            role={auth.role}
+            isAuthenticated={isAuthenticated}
+            title="Wishlist"
+            onLogout={handleLogout}
+            cartCount={cart.reduce(
+              (sum, item) => sum + item.quantity,
+              0
+            )}
+            wishlistCount={wishlist.length}
+          >
+            <WishlistPage
+              wishlist={wishlist}
+              onToggleWishlist={toggleWishlist}
+              onAddToCart={addToCart}
+              isAuthenticated={isAuthenticated}
+            />
+          </AppLayout>
         }
       />
 
@@ -373,7 +405,14 @@ function App() {
           )
         }
       />
-    </Routes>
+      </Routes>
+
+      <GuestAuthModal
+        isOpen={showGuestAuthModal}
+        onClose={() => setShowGuestAuthModal(false)}
+        onLoginSuccess={handleLogin}
+      />
+    </>
   );
 }
 

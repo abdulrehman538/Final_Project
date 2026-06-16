@@ -9,7 +9,7 @@ const emptyPayment = {
   cvc: "",
 };
 
-function ProductDetail({ onAddToCart, onToggleWishlist, wishlist = [] }) {
+function ProductDetail({ onAddToCart, onToggleWishlist, wishlist = [], isAuthenticated = false }) {
   const { id } = useParams();
   const navigate = useNavigate();
   const location = useLocation();
@@ -31,10 +31,13 @@ function ProductDetail({ onAddToCart, onToggleWishlist, wishlist = [] }) {
       }
 
       try {
+        const headers = {};
+        if (token) {
+          headers.Authorization = `Bearer ${token}`;
+        }
+
         const response = await fetch(`http://127.0.0.1:8000/api/products/${id}/`, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          headers,
         });
 
         if (!response.ok) {
@@ -196,7 +199,11 @@ function ProductDetail({ onAddToCart, onToggleWishlist, wishlist = [] }) {
           </p>
 
           <div className="detail-actions">
-            <button type="button" className="btn btn-primary" onClick={() => onAddToCart(product)}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={() => onAddToCart(product)}
+            >
               Add to Cart
             </button>
             <button type="button" className="btn btn-secondary" onClick={() => setPaymentOpen(true)}>

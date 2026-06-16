@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User, Group
-from .models import Product, ProductImage, UserProfile, ProductComment
+from .models import Product, ProductImage, UserProfile, ProductComment, Order, OrderItem
 
 class ProductImageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -44,14 +44,16 @@ class ProductSerializer(serializers.ModelSerializer):
 class UserRegisterSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(required=False, allow_blank=True)
     phone = serializers.CharField(required=False, allow_blank=True, write_only=True)
+    address = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     class Meta:
         model = User
-        fields = ["username", "password", "email", "phone"]
+        fields = ["username", "password", "email", "phone", "address"]
 
     def create(self, validated_data):
         email = validated_data.pop("email", "")
         phone = validated_data.pop("phone", "")
+        address = validated_data.pop("address", "")
 
         user = User.objects.create_user(
             username=validated_data["username"],
@@ -61,11 +63,20 @@ class UserRegisterSerializer(serializers.ModelSerializer):
 
         user_group, _ = Group.objects.get_or_create(name="Buyer")
         user.groups.add(user_group)
-        UserProfile.objects.get_or_create(user=user, defaults={"phone": phone})
-        if phone:
-            profile = user.profile
-            profile.phone = phone
-            profile.save(update_fields=["phone"])
+        profile, created = UserProfile.objects.get_or_create(
+            user=user,
+            defaults={"phone": phone, "address": address}
+        )
+        if not created:
+            update_fields = []
+            if phone:
+                profile.phone = phone
+                update_fields.append("phone")
+            if address:
+                profile.address = address
+                update_fields.append("address")
+            if update_fields:
+                profile.save(update_fields=update_fields)
 
         return user
 
@@ -116,3 +127,23 @@ class ProductCommentSerializer(serializers.ModelSerializer):
     class Meta:
         model = ProductComment
         fields = ["id", "username", "body", "created_at"]
+
+
+class OrderItemSerializer(serializers.ModelSerializer):
+    product_name = serializers.CharField(source="product.name", read_only=True)
+    store_name = serializers.CharField(source="product.store_name", read_only=True)
+    seller_username = serializers.CharField(source="seller.username", read_only=True)
+
+    class Meta:
+        model = OrderItem
+        fields = ["id", "product", "product_name", "store_name", "quantity", "price", "seller_username"]
+
+
+class OrderSerializer(serializers.ModelSerializer):
+    buyer_username = serializers.CharField(source="buyer.username", read_only=True)
+    items = OrderItemSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = Order
+        fields = ["id", "buyer_username", "status", "total_price", "items", "created_at", "updated_at"]
+        read_only_fields = ["id", "buyer_username", "created_at", "updated_at"]

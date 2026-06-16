@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import "./AuthPage.css";
 
@@ -6,6 +6,7 @@ function AuthPage({ onLogin }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [mode, setMode] = useState(location.pathname === "/register" ? "signup" : "signin");
+  const [signupStage, setSignupStage] = useState(1);
   const [signin, setSignin] = useState({ username: "", password: "" });
   const [signup, setSignup] = useState({
     username: "",
@@ -13,26 +14,57 @@ function AuthPage({ onLogin }) {
     confirmPassword: "",
     email: "",
     phone: "",
+    address1: "",
+    address2: "",
+    address3: "",
+    postalCode: "",
   });
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
+  // "idle" | "checking" | "available" | "taken"
+  const [usernameStatus, setUsernameStatus] = useState("idle");
+  const usernameDebounceRef = useRef(null);
 
   useEffect(() => {
     setMode(location.pathname === "/register" ? "signup" : "signin");
+    setSignupStage(1);
   }, [location.pathname]);
+
+  // Debounced username availability check
+  useEffect(() => {
+    const username = signup.username.trim();
+    if (!username || !/^[\w.@+-]+$/.test(username)) {
+      setUsernameStatus("idle");
+      return;
+    }
+    setUsernameStatus("checking");
+    if (usernameDebounceRef.current) clearTimeout(usernameDebounceRef.current);
+    usernameDebounceRef.current = setTimeout(async () => {
+      try {
+        const res = await fetch(
+          `http://127.0.0.1:8000/api/check-username/?username=${encodeURIComponent(username)}`
+        );
+        const data = await res.json();
+        setUsernameStatus(data.available ? "available" : "taken");
+      } catch {
+        setUsernameStatus("idle");
+      }
+    }, 500);
+    return () => clearTimeout(usernameDebounceRef.current);
+  }, [signup.username]);
 
   const content = useMemo(
     () => ({
       signin: {
-        title: "",
-        heading: "",
-        body: "",
+        title: "Welcome Back",
+        heading: "Log in to your account",
+        body: "Enter your username and password to continue shopping.",
         button: "Continue",
       },
       signup: {
-        title: "",
-        heading: "",
-        body: "",
+        title: "Create Account",
+        heading: "Start selling and buying",
+        body: "Join us and manage your orders, wishlist, and profile.",
         button: "Create Account",
       },
     }),
@@ -43,6 +75,7 @@ function AuthPage({ onLogin }) {
     setError("");
     setMessage("");
     setMode(nextMode);
+    setSignupStage(1);
     navigate(nextMode === "signin" ? "/" : "/register", { replace: true });
   };
 
@@ -81,15 +114,71 @@ function AuthPage({ onLogin }) {
     navigate(role === "admin" ? "/dashboard" : role === "seller" ? "/products" : "/marketplace");
   };
 
+  const handleNextStage = (event) => {
+    event.preventDefault();
+    setError("");
+
+    if (!signup.username.trim()) {
+      setError("Please enter a username.");
+      return;
+    }
+    if (!/^[\w.@+-]+$/.test(signup.username)) {
+      setError("Username can only contain letters, digits, and @/./+/-/_ (no spaces).");
+      return;
+    }
+    if (usernameStatus === "checking") {
+      setError("Please wait while we check username availability.");
+      return;
+    }
+    if (usernameStatus === "taken") {
+      setError("That username is already taken. Please choose a different one.");
+      return;
+    }
+    if (!signup.email.trim()) {
+      setError("Please enter your email.");
+      return;
+    }
+    if (!signup.phone.trim()) {
+      setError("Please enter your mobile number.");
+      return;
+    }
+    if (!signup.password) {
+      setError("Please enter a password.");
+      return;
+    }
+    if (signup.password !== signup.confirmPassword) {
+      setError("Passwords do not match.");
+      return;
+    }
+
+    setSignupStage(2);
+  };
+
   const handleSignup = async (event) => {
     event.preventDefault();
     setError("");
     setMessage("");
 
-    if (signup.password !== signup.confirmPassword) {
-      setError("Passwords do not match.");
+    if (signupStage === 1) {
+      handleNextStage(event);
       return;
     }
+
+    if (!signup.address1.trim()) {
+      setError("Address Line 1 is required.");
+      return;
+    }
+    if (!signup.postalCode.trim()) {
+      setError("Postal / Zip Code is required.");
+      return;
+    }
+
+    const addressJson = JSON.stringify({
+      address1: signup.address1,
+      address2: signup.address2,
+      address3: signup.address3,
+      postal_code: signup.postalCode,
+    });
 
     const response = await fetch("http://127.0.0.1:8000/api/register/", {
       method: "POST",
@@ -99,12 +188,14 @@ function AuthPage({ onLogin }) {
         password: signup.password,
         email: signup.email,
         phone: signup.phone,
+        address: addressJson,
       }),
     });
 
     if (response.ok) {
-      setMessage("Account created successfully. Please sign in.");
+      setMessage("Account created successfully! Please sign in.");
       setMode("signin");
+      setSignupStage(1);
       navigate("/", { replace: true });
       setSignin({ username: signup.username, password: "" });
       setSignup({
@@ -113,6 +204,10 @@ function AuthPage({ onLogin }) {
         confirmPassword: "",
         email: "",
         phone: "",
+        address1: "",
+        address2: "",
+        address3: "",
+        postalCode: "",
       });
     } else {
       const data = await response.json().catch(() => ({}));
@@ -130,11 +225,11 @@ function AuthPage({ onLogin }) {
           <div className="auth-brand">
             <img
               src="/Final%20App%20Logo.png"
-              alt="Daraz Market logo"
+              alt="CArTGo logo"
               className="auth-brand-logo"
             />
             <div>
-              <p className="auth-brand-title">Daraz Market</p>
+              <p className="auth-brand-title">CArTGo</p>
               <span className="auth-brand-subtitle">Buy. Sell. Grow.</span>
             </div>
           </div>
@@ -180,91 +275,197 @@ function AuthPage({ onLogin }) {
           </button>
         </div>
 
-        <div className="auth-card auth-card--split">
-          <div className="auth-copy">
-            <p className="eyebrow">{activeContent.title}</p>
-            <h2>{activeContent.heading}</h2>
-            <p className="subtext">{activeContent.body}</p>
-          </div>
-
+        <div className="auth-card auth-card--centered">
           <form className="auth-form" onSubmit={mode === "signin" ? handleLogin : handleSignup}>
             {error && <div className="auth-alert">{error}</div>}
             {message && <div className="auth-alert auth-alert-success">{message}</div>}
 
             {mode === "signup" ? (
               <>
-                <label className="field-label">Enter Your Name</label>
-                <input
-                  className="field-input"
-                  type="text"
-                  placeholder="Enter your name"
-                  value={signup.username}
-                  onChange={(e) => setSignup((current) => ({ ...current, username: e.target.value }))}
-                />
+                {/* Step Progress Bar */}
+                <div className="signup-steps">
+                  <div
+                    className={`signup-step ${signupStage === 1 ? "is-active" : ""} ${signupStage > 1 ? "is-complete" : ""}`}
+                    onClick={() => signupStage > 1 && setSignupStage(1)}
+                    style={{ cursor: signupStage > 1 ? "pointer" : "default" }}
+                  >
+                    <span className="step-num">1</span>
+                    <span className="step-label">Personal Info</span>
+                  </div>
+                  <div className="step-line-container">
+                    <div className={`step-line ${signupStage > 1 ? "is-complete" : ""}`} />
+                  </div>
+                  <div className={`signup-step ${signupStage === 2 ? "is-active" : ""}`}>
+                    <span className="step-num">2</span>
+                    <span className="step-label">Address Details</span>
+                  </div>
+                </div>
 
-                <label className="field-label">Enter Your Email</label>
-                <input
-                  className="field-input"
-                  type="email"
-                  placeholder="Enter your email"
-                  value={signup.email}
-                  onChange={(e) => setSignup((current) => ({ ...current, email: e.target.value }))}
-                />
+                {signupStage === 1 ? (
+                  <div className="form-stage-content fade-in">
+                    <label className="field-label">Username</label>
+                    <input
+                      className={`field-input field-input--small${usernameStatus === "taken"
+                          ? " field-input--error"
+                          : usernameStatus === "available"
+                            ? " field-input--success"
+                            : ""
+                        }`}
+                      type="text"
+                      placeholder="e.g. alex_johnson"
+                      value={signup.username}
+                      onChange={(e) =>
+                        setSignup((current) => ({
+                          ...current,
+                          username: e.target.value.trim(),
+                        }))
+                      }
+                      required
+                    />
+                    {usernameStatus === "checking" && (
+                      <p className="username-status username-status--checking">
+                        ⏳ Checking availability…
+                      </p>
+                    )}
+                    {usernameStatus === "available" && (
+                      <p className="username-status username-status--available">
+                        ✓ Username is available
+                      </p>
+                    )}
+                    {usernameStatus === "taken" && (
+                      <p className="username-status username-status--taken">
+                        ✗ Username already taken
+                      </p>
+                    )}
 
-                <label className="field-label">Enter Your Mobile No.</label>
-                <input
-                  className="field-input"
-                  type="text"
-                  placeholder="Enter your mobile number"
-                  value={signup.phone}
-                  onChange={(e) => setSignup((current) => ({ ...current, phone: e.target.value }))}
-                />
+                    <label className="field-label">Email</label>
+                    <input
+                      className="field-input field-input--small"
+                      type="email"
+                      placeholder="e.g. alex@gmail.com"
+                      value={signup.email}
+                      onChange={(e) => setSignup((current) => ({ ...current, email: e.target.value }))}
+                      required
+                    />
 
-                <label className="field-label">Password</label>
-                <input
-                  className="field-input"
-                  type="password"
-                  placeholder="Create password"
-                  value={signup.password}
-                  onChange={(e) => setSignup((current) => ({ ...current, password: e.target.value }))}
-                />
+                    <label className="field-label">Mobile Number</label>
+                    <input
+                      className="field-input field-input--small"
+                      type="text"
+                      placeholder="e.g. 03001234567"
+                      value={signup.phone}
+                      onChange={(e) => setSignup((current) => ({ ...current, phone: e.target.value }))}
+                      required
+                    />
 
-                <label className="field-label">Confirm Password</label>
-                <input
-                  className="field-input"
-                  type="password"
-                  placeholder="Confirm password"
-                  value={signup.confirmPassword}
-                  onChange={(e) => setSignup((current) => ({ ...current, confirmPassword: e.target.value }))}
-                />
+                    <label className="field-label">Password</label>
+                    <input
+                      className="field-input field-input--small"
+                      type="password"
+                      placeholder="Create password"
+                      value={signup.password}
+                      onChange={(e) => setSignup((current) => ({ ...current, password: e.target.value }))}
+                      required
+                    />
+
+                    <label className="field-label">Confirm Password</label>
+                    <input
+                      className="field-input field-input--small"
+                      type="password"
+                      placeholder="Confirm password"
+                      value={signup.confirmPassword}
+                      onChange={(e) => setSignup((current) => ({ ...current, confirmPassword: e.target.value }))}
+                      required
+                    />
+                  </div>
+                ) : (
+                  <div className="form-stage-content fade-in">
+                    <label className="field-label">Address Line 1</label>
+                    <input
+                      className="field-input field-input--small"
+                      type="text"
+                      placeholder="House/Apartment No, building name"
+                      value={signup.address1}
+                      onChange={(e) => setSignup((current) => ({ ...current, address1: e.target.value }))}
+                      required
+                    />
+
+                    <label className="field-label">Address Line 2 (Optional)</label>
+                    <input
+                      className="field-input field-input--small"
+                      type="text"
+                      placeholder="Street, area, colony name"
+                      value={signup.address2}
+                      onChange={(e) => setSignup((current) => ({ ...current, address2: e.target.value }))}
+                    />
+
+                    <label className="field-label">Address Line 3 (Optional)</label>
+                    <input
+                      className="field-input field-input--small"
+                      type="text"
+                      placeholder="Landmark, city, state"
+                      value={signup.address3}
+                      onChange={(e) => setSignup((current) => ({ ...current, address3: e.target.value }))}
+                    />
+
+                    <label className="field-label">Postal / Zip Code</label>
+                    <input
+                      className="field-input field-input--small"
+                      type="text"
+                      placeholder="e.g. 44000"
+                      value={signup.postalCode}
+                      onChange={(e) => setSignup((current) => ({ ...current, postalCode: e.target.value }))}
+                      required
+                    />
+
+                  </div>
+                )}
               </>
             ) : (
               <>
                 <label className="field-label">Username</label>
                 <input
-                  className="field-input"
+                  className="field-input field-input--small"
                   type="text"
                   placeholder="Enter your username"
                   value={signin.username}
                   onChange={(e) => setSignin((current) => ({ ...current, username: e.target.value }))}
+                  required
                 />
 
                 <label className="field-label">Password</label>
                 <input
-                  className="field-input"
+                  className="field-input field-input--small"
                   type="password"
                   placeholder="Enter your password"
                   value={signin.password}
                   onChange={(e) => setSignin((current) => ({ ...current, password: e.target.value }))}
+                  required
                 />
               </>
             )}
 
-            <button className="btn btn-primary auth-submit" type="submit">
-              {activeContent.button}
-            </button>
+            <div className="auth-actions-row" style={{ display: "flex", gap: "10px", marginTop: "16px" }}>
+              {mode === "signup" && signupStage === 2 && (
+                <button
+                  className="btn btn-secondary auth-btn-small"
+                  type="button"
+                  onClick={() => setSignupStage(1)}
+                  style={{ flex: "1", padding: "10px", minHeight: "40px", fontSize: "0.9rem" }}
+                >
+                  Back
+                </button>
+              )}
+              <button
+                className="btn btn-primary auth-btn-small"
+                type="submit"
+                style={{ flex: "2", padding: "10px", minHeight: "40px", fontSize: "0.9rem" }}
+              >
+                {mode === "signin" ? "Continue" : signupStage === 1 ? "Next: Address Details" : "Create Account"}
+              </button>
+            </div>
 
-            <p className="auth-switch">
+            <p className="auth-switch" style={{ marginTop: "16px", justifyContent: "center" }}>
               {mode === "signin" ? "Need an account?" : "Already have an account?"}
               <button type="button" onClick={() => switchMode(mode === "signin" ? "signup" : "signin")}>
                 {mode === "signin" ? "Sign Up" : "Sign In"}

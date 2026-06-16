@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { demoCategories, demoProducts } from "../data/demoProducts";
+import { demoCategories } from "../data/demoProducts";
 
 const valueProps = [
   { label: "Fast Delivery", value: "24-48h" },
@@ -15,16 +15,16 @@ function getProductMeta(product) {
   const store = product?.store_name || storeNames[seed % storeNames.length];
   const rating = (4.1 + (seed % 8) * 0.1).toFixed(1);
   const stock = Number.isFinite(Number(product?.stock)) ? Number(product.stock) : 12 + (seed % 18);
-  const category = product?.category || demoCategories[seed % demoCategories.length];
+  const category = product?.category || "General";
   const badge = stock > 10 ? "In Stock" : stock > 0 ? "Low Stock" : "Out of Stock";
 
   return { store, rating, stock, category, badge };
 }
 
-function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [] }) {
+function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [], isAuthenticated = false }) {
   const navigate = useNavigate();
-  const [products, setProducts] = useState(demoProducts);
-  const [loading, setLoading] = useState(false);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
   const [activeCategory, setActiveCategory] = useState("All");
@@ -38,10 +38,13 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [] }
       setError("");
 
       try {
-        const response = await fetch("http://127.0.0.1:8000/api/products/", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+const headers = {};
+      if (token) {
+        headers.Authorization = `Bearer ${token}`;
+      }
+
+      const response = await fetch("http://127.0.0.1:8000/api/products/", {
+        headers,
         });
 
         if (!response.ok) {
@@ -49,10 +52,16 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [] }
         }
 
         const data = await response.json();
-        setProducts(Array.isArray(data) && data.length ? data : demoProducts);
+        const fetchedProducts = Array.isArray(data) ? data : [];
+        
+        if (fetchedProducts.length === 0) {
+          setError("No products available at the moment. Check back soon!");
+        }
+        
+        setProducts(fetchedProducts);
       } catch (err) {
-        setProducts(demoProducts);
-        setError(err.message || "Unable to fetch products.");
+        setError(err.message || "Unable to fetch products. Please try again later.");
+        setProducts([]);
       } finally {
         setLoading(false);
       }
@@ -62,6 +71,18 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [] }
   }, [token]);
 
   const featuredProducts = useMemo(() => products.slice(0, 4), [products]);
+  const trendingProducts = useMemo(() => products.slice(0, 9), [products]);
+
+  // Dynamically generate categories from products
+  const uniqueCategories = useMemo(() => {
+    const categories = new Set();
+    products.forEach(product => {
+      if (product.category) {
+        categories.add(product.category);
+      }
+    });
+    return Array.from(categories).sort();
+  }, [products]);
 
   const visibleProducts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
@@ -106,7 +127,7 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [] }
     <div className="marketplace-layout">
       <section className="market-hero card">
         <div className="market-hero-copy">
-          <p className="eyebrow">Daraz-style marketplace</p>
+          <p className="eyebrow"> marketplace</p>
           <h2 className="market-title">Find products, follow stores, and check out in a few clicks.</h2>
           <p className="subtext">
             Browse a cleaner storefront experience with featured deals, categorized discovery, cart actions,
@@ -155,14 +176,14 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [] }
             <p className="eyebrow">Categories</p>
             <h3>Shop by category</h3>
           </div>
-          <span className="pill">{demoCategories.length} categories</span>
+          <span className="pill">{uniqueCategories.length} categories</span>
         </div>
 
         <div className="category-grid">
           <button type="button" className={`category-card${activeCategory === "All" ? " is-active" : ""}`} onClick={() => setActiveCategory("All")}>
             All
           </button>
-          {demoCategories.map((category) => (
+          {uniqueCategories.map((category) => (
             <button
               type="button"
               key={category}
@@ -225,20 +246,71 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [] }
             <span className="pill">{featuredProducts.length} featured</span>
           </div>
 
-          <div className="featured-row">
-            {featuredProducts.map((product) => {
-              const meta = getProductMeta(product);
-              return (
-                <article className="featured-card" key={product.id} onClick={() => handleProductClick(product)}>
-                  <div className="featured-art">Deal</div>
-                  <div>
-                    <h4>{product.name}</h4>
-                    <p className="subtext">{meta.store}</p>
-                    <strong>${Number(product.price || 0).toFixed(2)}</strong>
-                  </div>
-                </article>
-              );
-            })}
+          <div style={{ display: "grid", gap: "18px", gridTemplateColumns: "1fr auto" }}>
+            <div className="featured-row">
+              {featuredProducts.map((product) => {
+                const meta = getProductMeta(product);
+                return (
+                  <article className="featured-card" key={product.id} onClick={() => handleProductClick(product)}>
+                    <div className="featured-art">Deal</div>
+                    <div>
+                      <h4>{product.name}</h4>
+                      <p className="subtext">{meta.store}</p>
+                      <strong>${Number(product.price || 0).toFixed(2)}</strong>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+
+            <div style={{ display: "grid", gap: "12px", width: "320px", maxHeight: "500px", overflowY: "auto" }}>
+              <div style={{ paddingBottom: "8px", borderBottom: "1px solid rgba(229, 231, 235, 0.95)" }}>
+                <p className="eyebrow" style={{ margin: "0 0 4px 0" }}>Trending Now</p>
+                <h4 style={{ margin: "0" }}>Recommended for You</h4>
+              </div>
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "12px" }}>
+                {trendingProducts.map((product, index) => {
+                  const meta = getProductMeta(product);
+                  const firstImage = (product.images && product.images[0] && product.images[0].image) || product.image_url;
+                  const resolvedImage = firstImage ? (firstImage.startsWith("/") ? `http://127.0.0.1:8000${firstImage}` : firstImage) : null;
+                  const image =
+                    resolvedImage ||
+                    `https://placehold.co/600x600/fdf2e8/f57224?text=${encodeURIComponent(String(product.name || "Product").slice(0, 12))}`;
+
+                  return (
+                    <div
+                      key={product.id}
+                      onClick={() => handleProductClick(product)}
+                      style={{
+                        padding: "10px",
+                        borderRadius: "12px",
+                        background: "var(--surface)",
+                        border: "1px solid rgba(229, 231, 235, 0.95)",
+                        cursor: "pointer",
+                        transition: "all 180ms ease",
+                      }}
+                      onMouseEnter={(e) => {
+                        e.currentTarget.style.boxShadow = "0 8px 16px rgba(17, 24, 39, 0.1)";
+                        e.currentTarget.style.transform = "translateY(-1px)";
+                      }}
+                      onMouseLeave={(e) => {
+                        e.currentTarget.style.boxShadow = "none";
+                        e.currentTarget.style.transform = "translateY(0)";
+                      }}
+                    >
+                      <img
+                        src={image}
+                        alt={product.name}
+                        style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "8px", marginBottom: "6px" }}
+                      />
+                      <h5 style={{ margin: "0", fontSize: "0.85rem", fontWeight: "600", lineHeight: "1.2" }}>{product.name}</h5>
+                      <p style={{ margin: "4px 0", fontSize: "0.75rem", color: "var(--text-secondary)" }}>{meta.store}</p>
+                      <strong style={{ fontSize: "0.9rem", color: "var(--primary)" }}>${Number(product.price || 0).toFixed(2)}</strong>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
           </div>
 
           <div className="product-grid">
@@ -276,7 +348,11 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [] }
                       <div className="product-rating">★ {meta.rating}</div>
                       <p className="product-price">${Number(product.price || 0).toFixed(2)}</p>
                       <div className="product-actions">
-                        <button type="button" className="btn btn-primary" onClick={() => onAddToCart(product)}>
+                        <button
+                          type="button"
+                          className="btn btn-primary"
+                          onClick={() => onAddToCart(product)}
+                        >
                           Add to cart
                         </button>
                         <button
