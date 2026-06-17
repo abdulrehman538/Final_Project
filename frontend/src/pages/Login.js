@@ -40,7 +40,7 @@ function Login({ onLogin }) {
     // persist tokens and normalized role immediately so layout reads correct value
     localStorage.setItem("accessToken", data.access);
     localStorage.setItem("userRole", role);
-    localStorage.setItem("username", username);
+    localStorage.setItem("username", username); 
 
     onLogin(data.access, role, username);
     const dest = role === "admin" ? "/dashboard" : "/marketplace";

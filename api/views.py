@@ -11,6 +11,8 @@ from .models import (
     ProductComment,
     Order,
     OrderItem,
+    Cart,
+    CartItem,
 )
 
 from .serializers import (
@@ -21,13 +23,11 @@ from .serializers import (
     OrderSerializer,
     OrderItemSerializer,
     ProductImageSerializer,
+    CartSerializer,
 )
 
-from .permissions import (
-    IsSellerOrAdminOrReadOnly,
-    is_admin,
-    is_seller,
-)
+from .permissions import IsSellerOrAdminOrReadOnly
+from .utils import is_admin, is_seller
 
 
 class RegisterView(generics.CreateAPIView):
@@ -148,6 +148,130 @@ class ProductImageDetailView(generics.DestroyAPIView):
 
     def delete(self, request, *args, **kwargs):
         obj = self.get_object()
+        # permission: admin or seller owner of the product
+        user = request.user
+        if not (is_admin(user) or (is_seller(user) and getattr(obj.product, 'owner_id', None) == user.id)):
+            from rest_framework import status
+            return Response({'detail': 'You do not have permission to delete this image.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # delete file from storage then delete record
+        try:
+            if obj.image:
+                obj.image.delete(save=False)
+        except Exception:
+            pass
+
+        obj.delete()
+        from rest_framework import status
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+class CartView(generics.GenericAPIView):
+    """Cart endpoint handling GET, POST, PATCH, DELETE for authenticated users.
+    - GET returns current cart items.
+    - POST adds a product to the cart.
+    - PATCH updates quantity of an existing cart item.
+    - DELETE removes a cart item.
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = CartSerializer
+
+    def get_cart(self):
+        cart, _ = Cart.objects.get_or_create(user=self.request.user)
+        return cart
+
+    def get(self, request):
+        cart = self.get_cart()
+        serializer = self.get_serializer(cart)
+        return Response(serializer.data)
+
+    def post(self, request):
+        product_id = request.data.get('product_id')
+        quantity = request.data.get('quantity', 1)
+        if not product_id:
+            return Response({'detail': 'product_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            product = Product.objects.get(id=product_id)
+        except Product.DoesNotExist:
+            return Response({'detail': 'Product not found'}, status=status.HTTP_404_NOT_FOUND)
+        if product.stock < quantity:
+            return Response({'detail': f'Insufficient stock. Available: {product.stock}'}, status=status.HTTP_400_BAD_REQUEST)
+        cart = self.get_cart()
+        cart_item, created = CartItem.objects.get_or_create(cart=cart, product=product, defaults={'quantity': quantity})
+        if not created:
+            new_qty = cart_item.quantity + quantity
+            if product.stock < new_qty:
+                return Response({'detail': f'Insufficient stock for total quantity {new_qty}. Available: {product.stock}'}, status=status.HTTP_400_BAD_REQUEST)
+            cart_item.quantity = new_qty
+            cart_item.save(update_fields=['quantity'])
+        serializer = self.get_serializer(cart)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def patch(self, request):
+        item_id = request.data.get('item_id')
+        quantity = request.data.get('quantity')
+        if not item_id or quantity is None:
+            return Response({'detail': 'item_id and quantity required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            cart_item = CartItem.objects.select_related('product').get(id=item_id, cart__user=request.user)
+        except CartItem.DoesNotExist:
+            return Response({'detail': 'Cart item not found'}, status=status.HTTP_404_NOT_FOUND)
+        product = cart_item.product
+        if product.stock < quantity:
+            return Response({'detail': f'Insufficient stock. Available: {product.stock}'}, status=status.HTTP_400_BAD_REQUEST)
+        cart_item.quantity = quantity
+        cart_item.save(update_fields=['quantity'])
+        cart = self.get_cart()
+        serializer = self.get_serializer(cart)
+        return Response(serializer.data)
+
+    def delete(self, request):
+        item_id = request.data.get('item_id')
+        if not item_id:
+            return Response({'detail': 'item_id required'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            cart_item = CartItem.objects.get(id=item_id, cart__user=request.user)
+        except CartItem.DoesNotExist:
+            return Response({'detail': 'Cart item not found'}, status=status.HTTP_404_NOT_FOUND)
+        cart_item.delete()
+        cart = self.get_cart()
+        serializer = self.get_serializer(cart)
+        return Response(serializer.data)
+
+        obj = self.get_object()
+        # permission: admin or seller owner of the product
+        user = request.user
+        if not (is_admin(user) or (is_seller(user) and getattr(obj.product, 'owner_id', None) == user.id)):
+            from rest_framework import status
+            return Response({'detail': 'You do not have permission to delete this image.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # delete file from storage then delete record
+        try:
+            if obj.image:
+                obj.image.delete(save=False)
+        except Exception:
+            pass
+
+        obj.delete()
+        from rest_framework import status
+        return Response(status=status.HTTP_204_NO_CONTENT)
+        obj = self.get_object()
+        # permission: admin or seller owner of the product
+        user = request.user
+        if not (is_admin(user) or (is_seller(user) and getattr(obj.product, 'owner_id', None) == user.id)):
+            from rest_framework import status
+            return Response({'detail': 'You do not have permission to delete this image.'}, status=status.HTTP_403_FORBIDDEN)
+
+        # delete file from storage then delete record
+        try:
+            if obj.image:
+                obj.image.delete(save=False)
+        except Exception:
+            pass
+
+        obj.delete()
+        from rest_framework import status
+        return Response(status=status.HTTP_204_NO_CONTENT)
+        obj = self.get_object()
 
         # permission: admin or seller owner of the product
         user = request.user
@@ -168,6 +292,89 @@ class ProductImageDetailView(generics.DestroyAPIView):
 
 
 class CheckoutView(generics.GenericAPIView):
+    """
+    Handles cart checkout:
+    - Creates an Order with OrderItems
+    - Decreases product stock
+    - Validates stock availability
+    """
+    permission_classes = [IsAuthenticated]
+    serializer_class = OrderSerializer
+
+    def post(self, request):
+        cart_items = request.data.get('items', [])
+
+        if not cart_items:
+            return Response(
+                {'detail': 'Cart is empty'},
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        try:
+            with transaction.atomic():
+                total_price = 0
+                order_items_data = []
+
+                # Validate all items have sufficient stock
+                for item in cart_items:
+                    product_id = item.get('product_id')
+                    quantity = item.get('quantity', 1)
+
+                    try:
+                        product = Product.objects.get(id=product_id)
+                    except Product.DoesNotExist:
+                        return Response(
+                            {'detail': f'Product {product_id} not found'},
+                            status=status.HTTP_404_NOT_FOUND
+                        )
+
+                    if product.stock < quantity:
+                        return Response(
+                            {'detail': f'Insufficient stock for {product.name}. Available: {product.stock}'},
+                            status=status.HTTP_400_BAD_REQUEST
+                        )
+
+                    order_items_data.append({
+                        'product': product,
+                        'quantity': quantity,
+                        'price': product.price,
+                        'seller': product.owner,
+                    })
+
+                    total_price += float(product.price) * quantity
+
+                # Create order
+                order = Order.objects.create(
+                    buyer=request.user,
+                    status='completed',
+                    total_price=total_price
+                )
+
+                # Create order items and decrease stock
+                for item_data in order_items_data:
+                    product = item_data['product']
+                    quantity = item_data['quantity']
+
+                    OrderItem.objects.create(
+                        order=order,
+                        product=product,
+                        quantity=quantity,
+                        price=item_data['price'],
+                        seller=product.owner
+                    )
+
+                    # Decrease product stock
+                    product.stock -= quantity
+                    product.save(update_fields=['stock'])
+
+                serializer = self.get_serializer(order)
+                return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+        except Exception as e:
+            return Response(
+                {'detail': str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
     """
     Handles cart checkout:
     - Creates an Order with OrderItems

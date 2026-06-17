@@ -1,11 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import "./AuthPage.css";
 
 function AuthPage({ onLogin }) {
   const location = useLocation();
   const navigate = useNavigate();
-  const [mode, setMode] = useState(location.pathname === "/register" ? "signup" : "signin");
+  const [searchParams] = useSearchParams();
+  const [mode, setMode] = useState(location.pathname === "/register" || searchParams.get("mode") === "signup" ? "signup" : "signin");
   const [signupStage, setSignupStage] = useState(1);
   const [signin, setSignin] = useState({ username: "", password: "" });
   const [signup, setSignup] = useState({
@@ -26,9 +27,10 @@ function AuthPage({ onLogin }) {
   const usernameDebounceRef = useRef(null);
 
   useEffect(() => {
-    setMode(location.pathname === "/register" ? "signup" : "signin");
+    const forceSignup = searchParams.get("mode") === "signup";
+    setMode(location.pathname === "/register" || forceSignup ? "signup" : "signin");
     setSignupStage(1);
-  }, [location.pathname]);
+  }, [location.pathname, searchParams]);
 
   // Debounced username availability check
   useEffect(() => {
@@ -53,30 +55,16 @@ function AuthPage({ onLogin }) {
     return () => clearTimeout(usernameDebounceRef.current);
   }, [signup.username]);
 
-  const content = useMemo(
-    () => ({
-      signin: {
-        title: "Welcome Back",
-        heading: "Log in to your account",
-        body: "Enter your username and password to continue shopping.",
-        button: "Continue",
-      },
-      signup: {
-        title: "Create Account",
-        heading: "Start selling and buying",
-        body: "Join us and manage your orders, wishlist, and profile.",
-        button: "Create Account",
-      },
-    }),
-    []
-  );
-
   const switchMode = (nextMode) => {
     setError("");
     setMessage("");
     setMode(nextMode);
     setSignupStage(1);
-    navigate(nextMode === "signin" ? "/" : "/register", { replace: true });
+    // Preserve any existing redirect query parameter
+    const existingRedirect = searchParams.get("redirect");
+    const basePath = nextMode === "signin" ? "/login" : "/register";
+    const url = existingRedirect ? `${basePath}?redirect=${encodeURIComponent(existingRedirect)}` : basePath;
+    navigate(url, { replace: true });
   };
 
   const handleLogin = async (event) => {
@@ -111,7 +99,19 @@ function AuthPage({ onLogin }) {
     localStorage.setItem("username", signin.username);
 
     onLogin(data.access, role, signin.username);
-    navigate(role === "admin" ? "/dashboard" : role === "seller" ? "/products" : "/marketplace");
+    // After successful login, redirect to original page if provided
+    const redirectAfterLogin = searchParams.get("redirect");
+    if (redirectAfterLogin) {
+      navigate(redirectAfterLogin);
+    } else {
+      navigate(
+        role === "admin"
+          ? "/dashboard"
+          : role === "seller"
+          ? "/products"
+          : "/marketplace"
+      );
+    }
   };
 
   const handleNextStage = (event) => {
@@ -196,7 +196,13 @@ function AuthPage({ onLogin }) {
       setMessage("Account created successfully! Please sign in.");
       setMode("signin");
       setSignupStage(1);
+      // After successful registration, redirect to original page if provided
+    const redirectAfterSignup = searchParams.get("redirect");
+    if (redirectAfterSignup) {
+      navigate(redirectAfterSignup, { replace: true });
+    } else {
       navigate("/", { replace: true });
+    }
       setSignin({ username: signup.username, password: "" });
       setSignup({
         username: "",
@@ -214,8 +220,6 @@ function AuthPage({ onLogin }) {
       setError(data.detail || "Registration failed. Please try again.");
     }
   };
-
-  const activeContent = content[mode];
 
   return (
     <div className="auth-shell">

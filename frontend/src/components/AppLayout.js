@@ -11,12 +11,40 @@ function AppLayout({
   wishlistCount = 0,
 }) {
   const navigate = useNavigate();
+  const [searchQuery, setSearchQuery] = useState("");
 
   const normalizedRole = (
     role ||
     (isAuthenticated ? localStorage.getItem("userRole") : "buyer") ||
     "buyer"
   ).toLowerCase();
+
+  // Search suggestions state
+  const [suggestions, setSuggestions] = useState([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  // Fetch suggestions when search query changes
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSuggestions([]);
+      setShowSuggestions(false);
+      return;
+    }
+    const controller = new AbortController();
+    fetch(`http://127.0.0.1:8000/api/products/search/?q=${encodeURIComponent(searchQuery)}`, {
+      signal: controller.signal,
+    })
+      .then((res) => res.ok ? res.json() : [])
+      .then((data) => {
+        setSuggestions(data);
+        setShowSuggestions(true);
+      })
+      .catch(() => {
+        setSuggestions([]);
+        setShowSuggestions(false);
+      });
+    return () => controller.abort();
+  }, [searchQuery]);
 
   const isAdmin = normalizedRole === "admin";
   const isSeller = normalizedRole === "seller";
@@ -44,6 +72,19 @@ function AppLayout({
   }, [sidebarOpen]);
 
   const closeSidebar = () => setSidebarOpen(false);
+
+  const handleSearch = (event) => {
+    event.preventDefault();
+    const query = searchQuery.trim();
+
+    if (query) {
+      localStorage.setItem("marketplaceSearch", query);
+    } else {
+      localStorage.removeItem("marketplaceSearch");
+    }
+
+    navigate("/marketplace");
+  };
 
   return (
     <div className="app-shell">
@@ -119,7 +160,17 @@ function AppLayout({
               </button>
             </>
           )}
-</nav>
+
+          <button
+            className="sidebar-link"
+            onClick={() => {
+              closeSidebar();
+              navigate("/about");
+            }}
+          >
+            About Us
+          </button>
+        </nav>
       </aside>
 
       <div className="layout-main">
@@ -137,6 +188,26 @@ function AppLayout({
           </div>
 
           <div className="topbar-actions">
+<form className="topbar-search" onSubmit={handleSearch} autoComplete="off">
+  {showSuggestions && suggestions.length > 0 && (
+    <ul className="search-suggestions">
+      {suggestions.map((item) => (
+        <li key={item.id} onClick={() => { setSearchQuery(item.name); setShowSuggestions(false); navigate(`/product/${item.id}`); }}>
+          {item.name}
+        </li>
+      ))}
+    </ul>
+  )}
+  <input
+    type="search"
+    value={searchQuery}
+    onChange={(event) => setSearchQuery(event.target.value)}
+    placeholder="Search products"
+    aria-label="Search products"
+  />
+  <button type="submit" className="btn btn-primary">Search</button>
+</form>
+
             {isAdmin && (
               <>
                 <button
@@ -189,29 +260,10 @@ function AppLayout({
                   Home
                 </button>
 
+                <button className="btn btn-ghost" onClick={() => navigate("/cart")}>Cart ({cartCount})</button>
+                <button className="btn btn-ghost" onClick={() => navigate("/wishlist")}>Wishlist ({wishlistCount})</button>
                 {isAuthenticated ? (
-                  <>
-                    <button
-                      className="btn btn-ghost"
-                      onClick={() => navigate("/cart")}
-                    >
-                      Cart ({cartCount})
-                    </button>
-
-                    <button
-                      className="btn btn-ghost"
-                      onClick={() => navigate("/wishlist")}
-                    >
-                      Wishlist ({wishlistCount})
-                    </button>
-
-                    <button
-                      className="btn btn-ghost"
-                      onClick={() => navigate("/orders")}
-                    >
-                      Orders
-                    </button>
-                  </>
+                  <button className="btn btn-ghost" onClick={() => navigate("/orders")}>Orders</button>
                 ) : null}
               </>
             )}

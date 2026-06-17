@@ -45,6 +45,9 @@ function Register() {
         {message && <div className="auth-alert auth-alert-success">{message}</div>}
 
         <label className="field-label">Username</label>
+        <div className="help-text">
+             ℹ️ Username must be unique
+        </div>
         <input
           className="field-input"
           type="text"

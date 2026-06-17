@@ -1,10 +1,26 @@
-import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, useEffect } from "react";
+import { useNavigate, useLocation } from "react-router-dom";
 import "./CartPage.css";
 
 function CartPage({ cart = [], onUpdateQuantity, onRemoveItem, onClearCart }) {
+  const location = useLocation();
   const navigate = useNavigate();
+  // Open checkout modal if navigation state indicates so
+  useEffect(() => {
+    if (location.state && location.state.openCheckout) {
+      handleOpenCheckout();
+      // Clear the state to avoid re-trigger on re-renders
+      navigate(location.pathname, { replace: true });
+    }
+  }, [location.state]);
+  const [loadingProfile, setLoadingProfile] = useState(false);
+  const [profile, setProfile] = useState(null);
+  const [placingOrder, setPlacingOrder] = useState(false);
+  const [orderSuccess, setOrderSuccess] = useState(false);
+  const [newOrderId, setNewOrderId] = useState("");
+  // Modal visibility state for checkout
   const [showModal, setShowModal] = useState(false);
+  // Address fields for checkout form
   const [addressFields, setAddressFields] = useState({
     detail: "",
     address1: "",
@@ -12,11 +28,6 @@ function CartPage({ cart = [], onUpdateQuantity, onRemoveItem, onClearCart }) {
     address3: "",
     postal_code: "",
   });
-  const [loadingProfile, setLoadingProfile] = useState(false);
-  const [profile, setProfile] = useState(null);
-  const [placingOrder, setPlacingOrder] = useState(false);
-  const [orderSuccess, setOrderSuccess] = useState(false);
-  const [newOrderId, setNewOrderId] = useState("");
 
   const subtotal = cart.reduce((sum, item) => sum + Number(item.price || 0) * item.quantity, 0);
   const shipping = cart.length ? 12.99 : 0;
@@ -212,11 +223,15 @@ function CartPage({ cart = [], onUpdateQuantity, onRemoveItem, onClearCart }) {
                 <strong>${Number(item.price || 0).toFixed(2)}</strong>
 
                 <div className="quantity-control">
-                  <button type="button" className="btn btn-ghost" onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}>
+                  <button type="button" className="btn btn-ghost" onClick={() => onUpdateQuantity(item.id, item.quantity - 1)} disabled={item.quantity <= 1}>
                     -
                   </button>
                   <span>{item.quantity}</span>
-                  <button type="button" className="btn btn-ghost" onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}>
+                  <button type="button" className="btn btn-ghost" onClick={() => {
+                    if (item.quantity < (item.stock ?? Infinity)) {
+                      onUpdateQuantity(item.id, item.quantity + 1);
+                    }
+                  }} disabled={item.quantity >= (item.stock ?? Infinity)}>
                     +
                   </button>
                 </div>
@@ -286,7 +301,7 @@ function CartPage({ cart = [], onUpdateQuantity, onRemoveItem, onClearCart }) {
         <div className="modal-overlay">
           <div className="checkout-modal card fade-in">
             <button className="modal-close" onClick={() => setShowModal(false)}>&times;</button>
-            
+
             {orderSuccess ? (
               <div className="order-success-state">
                 <div className="success-icon">✓</div>

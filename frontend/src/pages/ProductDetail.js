@@ -21,6 +21,7 @@ function ProductDetail({ onAddToCart, onToggleWishlist, wishlist = [], isAuthent
   const [loading, setLoading] = useState(false);
   const [commentLoading, setCommentLoading] = useState(false);
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [qty, setQty] = useState(1);
   const [payment, setPayment] = useState(emptyPayment);
 
   useEffect(() => {
@@ -198,15 +199,42 @@ function ProductDetail({ onAddToCart, onToggleWishlist, wishlist = [], isAuthent
             {product.description || "Product detail page with professional buying experience, comments, and secure checkout flow."}
           </p>
 
+          {/* Quantity selector */}
+          <div className="quantity-selector" style={{ display: "flex", alignItems: "center", gap: "0.5rem", marginBottom: "1rem" }}>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={product.stock !== undefined && qty <= 1}
+              onClick={() => setQty((q) => Math.max(q - 1, 1))}
+            >
+              -
+            </button>
+            <span>{qty}</span>
+            <button
+              type="button"
+              className="btn btn-ghost"
+              disabled={product.stock !== undefined && qty >= product.stock}
+              onClick={() => setQty((q) => (product.stock ? Math.min(q + 1, product.stock) : q + 1))}
+            >
+              +
+            </button>
+          </div>
           <div className="detail-actions">
             <button
               type="button"
               className="btn btn-primary"
-              onClick={() => onAddToCart(product)}
+              onClick={() => onAddToCart(product, qty)}
             >
               Add to Cart
             </button>
-            <button type="button" className="btn btn-secondary" onClick={() => setPaymentOpen(true)}>
+            <button
+              type="button"
+              className="btn btn-secondary"
+              onClick={async () => {
+                await onAddToCart(product, qty);
+                navigate('/cart', { state: { openCheckout: true } });
+              }}
+            >
               Buy Now
             </button>
           </div>

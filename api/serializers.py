@@ -1,6 +1,6 @@
 from rest_framework import serializers
 from django.contrib.auth.models import User, Group
-from .models import Product, ProductImage, UserProfile, ProductComment, Order, OrderItem
+from .models import Product, ProductImage, UserProfile, ProductComment, Order, OrderItem, Cart, CartItem
 
 class ProductImageSerializer(serializers.ModelSerializer):
     class Meta:
@@ -147,3 +147,17 @@ class OrderSerializer(serializers.ModelSerializer):
         model = Order
         fields = ["id", "buyer_username", "status", "total_price", "items", "created_at", "updated_at"]
         read_only_fields = ["id", "buyer_username", "created_at", "updated_at"]
+
+class CartItemSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CartItem
+        fields = ('id', 'product', 'quantity')
+        read_only_fields = ('id',)
+        depth = 1
+
+class CartSerializer(serializers.ModelSerializer):
+    items = CartItemSerializer(many=True, read_only=True)
+    class Meta:
+        model = Cart
+        fields = ('id', 'user', 'items')
+        read_only_fields = ('id', 'user')

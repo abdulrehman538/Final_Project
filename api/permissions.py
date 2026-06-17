@@ -1,24 +1,7 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
-
-def is_admin(user):
-    return bool(user and user.is_authenticated and (user.is_staff or user.is_superuser or user.groups.filter(name="Admin").exists()))
-
-
-def is_seller(user):
-    return bool(
-        user
-        and user.is_authenticated
-        and (
-            user.is_staff
-            or user.is_superuser
-            or user.groups.filter(name="Seller").exists()
-            or (
-                getattr(user, "profile", None) is not None
-                and getattr(user.profile, "is_seller", False)
-            )
-        )
-    )
+# Permission helper imports
+from .utils import is_admin, is_seller
 
 
 class IsSellerOrAdminOrReadOnly(BasePermission):

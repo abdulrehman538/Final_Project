@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { demoCategories } from "../data/demoProducts";
 
 const valueProps = [
   { label: "Fast Delivery", value: "24-48h" },
@@ -31,6 +30,17 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [], 
   const [sortBy, setSortBy] = useState("featured");
   const [onlyInStock, setOnlyInStock] = useState(false);
   const token = localStorage.getItem("accessToken");
+
+  useEffect(() => {
+    const savedQuery = localStorage.getItem("marketplaceSearch") || "";
+    if (savedQuery) {
+      setQuery(savedQuery);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("marketplaceSearch", query);
+  }, [query]);
 
   useEffect(() => {
     const loadProducts = async () => {
