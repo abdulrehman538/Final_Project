@@ -242,6 +242,18 @@ function AppLayout({
                   Marketplace
                 </button>
 
+                <button className="btn btn-ghost" onClick={() => navigate("/cart")}>
+                  Cart ({cartCount})
+                </button>
+
+                <button className="btn btn-ghost" onClick={() => navigate("/wishlist")}>
+                  Wishlist ({wishlistCount})
+                </button>
+
+                <button className="btn btn-ghost" onClick={() => navigate("/orders")}>
+                  Orders
+                </button>
+
                 <button
                   className="btn btn-ghost"
                   onClick={() => navigate("/products")}

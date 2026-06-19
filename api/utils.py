@@ -12,7 +12,8 @@ def is_admin(user):
 
 
 def is_seller(user):
-    """Return True if the user is a seller (staff, superuser, in Seller group, or has profile.is_seller)."""
+    """Return True only for approved sellers."""
+    profile = getattr(user, "profile", None)
     return bool(
         user
         and user.is_authenticated
@@ -20,7 +21,11 @@ def is_seller(user):
             user.is_staff
             or user.is_superuser
             or user.groups.filter(name="Seller").exists()
-            or (getattr(user, "profile", None) is not None and getattr(user.profile, "is_seller", False))
+            or (
+                profile is not None
+                and getattr(profile, "is_seller", False)
+                and getattr(profile, "seller_status", "none") == "approved"
+            )
         )
     )
 

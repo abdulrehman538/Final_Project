@@ -83,8 +83,6 @@ function App() {
   };
 
   const handleBecomeSeller = (storeName) => {
-    setAuth((current) => ({ ...current, role: "seller" }));
-
     if (storeName) {
       localStorage.setItem("sellerStoreName", storeName);
     }

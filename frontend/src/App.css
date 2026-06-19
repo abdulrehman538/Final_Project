@@ -944,6 +944,98 @@ select:focus {
   gap: 12px;
 }
 
+.seller-upgrade-box {
+  display: grid;
+  gap: 12px;
+}
+
+.seller-upgrade-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.6);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  z-index: 1000;
+}
+
+.seller-upgrade-modal {
+  width: min(700px, 100%);
+  max-height: min(92vh, 860px);
+  overflow-y: auto;
+  background:
+    linear-gradient(180deg, #fff 0%, #fffaf6 100%);
+  border-radius: 28px;
+  padding: 24px;
+  box-shadow: var(--shadow-strong);
+  display: grid;
+  gap: 16px;
+  border: 1px solid rgba(245, 114, 36, 0.16);
+}
+
+.seller-upgrade-modal__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid rgba(229, 231, 235, 0.9);
+}
+
+.seller-upgrade-modal__header h3 {
+  margin: 0 0 6px;
+  font-size: 1.35rem;
+}
+
+.seller-upgrade-modal__summary {
+  padding: 14px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(245, 114, 36, 0.10), rgba(22, 163, 74, 0.08));
+  border: 1px solid rgba(245, 114, 36, 0.14);
+  display: grid;
+  gap: 10px;
+}
+
+.seller-upgrade-benefits {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--text);
+  display: grid;
+  gap: 6px;
+}
+
+.seller-upgrade-form {
+  display: grid;
+  gap: 10px;
+}
+
+.seller-upgrade-modal__terms {
+  padding: 14px;
+  border-radius: 18px;
+  background: rgba(15, 23, 42, 0.03);
+  border: 1px solid rgba(229, 231, 235, 0.9);
+  display: grid;
+  gap: 8px;
+}
+
+.seller-upgrade-modal__terms h4 {
+  margin: 0;
+  font-size: 1rem;
+}
+
+.seller-upgrade-modal__actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.seller-checkbox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95rem;
+}
+
 .summary-box {
   display: grid;
   gap: 12px;

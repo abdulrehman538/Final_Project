@@ -35,9 +35,20 @@ class ProductImage(models.Model):
         return f"{self.product.name} image"
 
 class UserProfile(models.Model):
+    SELLER_STATUS_CHOICES = [
+        ('none', 'No request'),
+        ('pending', 'Pending approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+    ]
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
     is_seller = models.BooleanField(default=False)
+    seller_status = models.CharField(max_length=20, choices=SELLER_STATUS_CHOICES, default='none')
     store_name = models.CharField(max_length=120, blank=True, default="")
+    business_description = models.TextField(blank=True, default="")
+    contact_phone = models.CharField(max_length=30, blank=True, default="")
+    terms_accepted = models.BooleanField(default=False)
     full_name = models.CharField(max_length=150, blank=True, default="")
     phone = models.CharField(max_length=30, blank=True, default="")
     address = models.CharField(max_length=255, blank=True, default="")
@@ -62,6 +73,9 @@ class ProductComment(models.Model):
 class Order(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending'),
+        ('confirmed', 'Confirmed'),
+        ('shipped', 'Shipped'),
+        ('delivered', 'Delivered'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     ]

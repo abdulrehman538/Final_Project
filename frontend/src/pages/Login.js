@@ -2,6 +2,8 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import "./Login.css";
 
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
+
 function Login({ onLogin }) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
@@ -10,41 +12,46 @@ function Login({ onLogin }) {
 
   const handleLogin = async () => {
     setError("");
-    const response = await fetch("http://127.0.0.1:8000/api/login/", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        username,
-        password,
-      }),
-    });
 
-    const data = await response.json();
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/login/`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          username,
+          password,
+        }),
+      });
 
-    if (!response.ok) {
-      setError(data.detail || "Unable to sign in. Please check your credentials.");
-      return;
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        setError(data.detail || "Unable to sign in. Please check your credentials.");
+        return;
+      }
+
+      const roleResponse = await fetch(`${API_BASE_URL}/api/user-role/`, {
+        headers: {
+          Authorization: `Bearer ${data.access}`,
+        },
+      });
+
+      const roleData = await roleResponse.json().catch(() => ({}));
+      const role = (roleData.role || "user").toString().toLowerCase();
+
+      localStorage.setItem("accessToken", data.access);
+      localStorage.setItem("userRole", role);
+      localStorage.setItem("username", username);
+
+      onLogin(data.access, role, username);
+      const dest = role === "admin" ? "/dashboard" : "/marketplace";
+      navigate(dest);
+    } catch (error) {
+      console.error("Login failed", error);
+      setError("Unable to reach the server. Please make sure the backend is running.");
     }
-
-    const roleResponse = await fetch("http://127.0.0.1:8000/api/user-role/", {
-      headers: {
-        Authorization: `Bearer ${data.access}`,
-      },
-    });
-
-    const roleData = await roleResponse.json();
-    const role = (roleData.role || "user").toString().toLowerCase();
-
-    // persist tokens and normalized role immediately so layout reads correct value
-    localStorage.setItem("accessToken", data.access);
-    localStorage.setItem("userRole", role);
-    localStorage.setItem("username", username); 
-
-    onLogin(data.access, role, username);
-    const dest = role === "admin" ? "/dashboard" : "/marketplace";
-    navigate(dest);
   };
 
   return (

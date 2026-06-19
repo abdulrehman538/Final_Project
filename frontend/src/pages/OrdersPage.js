@@ -1,27 +1,65 @@
 import { useEffect, useState } from "react";
 
-const staticMockOrders = [
-  { id: "#ORD-1024", status: "Processing", total: "$149.00", date: "Jun 10, 2026" },
-  { id: "#ORD-1011", status: "Delivered", total: "$74.50", date: "Jun 03, 2026" },
-  { id: "#ORD-0998", status: "Shipped", total: "$129.00", date: "May 29, 2026" },
-];
-
 function OrdersPage() {
   const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [updatingOrderId, setUpdatingOrderId] = useState(null);
+
+  const token = localStorage.getItem("accessToken");
+
+  const loadOrders = async () => {
+    if (!token) {
+      setLoading(false);
+      return;
+    }
+
+    try {
+      const response = await fetch("http://127.0.0.1:8000/api/orders/", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to load orders");
+      }
+
+      const data = await response.json();
+      setOrders(Array.isArray(data) ? data : []);
+    } catch (e) {
+      console.error("Failed to load orders", e);
+      setOrders([]);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   useEffect(() => {
+    loadOrders();
+  }, [token]);
+
+  const confirmDelivery = async (orderId) => {
+    if (!token) return;
+    setUpdatingOrderId(orderId);
+
     try {
-      const stored = localStorage.getItem("cartOrders");
-      if (stored) {
-        setOrders(JSON.parse(stored));
-      } else {
-        setOrders(staticMockOrders);
+      const response = await fetch(`http://127.0.0.1:8000/api/orders/${orderId}/confirm-delivery/`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to confirm delivery");
       }
-    } catch (e) {
-      console.error("Failed to load local orders", e);
-      setOrders(staticMockOrders);
+
+      const updatedOrder = await response.json();
+      setOrders((current) =>
+        current.map((order) => (order.id === orderId ? { ...order, status: updatedOrder.status } : order))
+      );
+    } catch (error) {
+      console.error("Delivery confirmation failed", error);
+    } finally {
+      setUpdatingOrderId(null);
     }
-  }, []);
+  };
 
   return (
     <div className="orders-page">
@@ -34,7 +72,9 @@ function OrdersPage() {
         </div>
 
         <div className="table-card" style={{ marginTop: "20px" }}>
-          {orders.length === 0 ? (
+          {loading ? (
+            <div className="empty-state">Loading orders…</div>
+          ) : orders.length === 0 ? (
             <div className="empty-state">No orders found.</div>
           ) : (
             orders.map((order) => (
@@ -51,27 +91,31 @@ function OrdersPage() {
                 }}
               >
                 <div>
-                  <strong>{order.id}</strong>
-                  <p className="subtext" style={{ margin: "4px 0 0 0", fontSize: "0.9rem" }}>Ordered on: {order.date}</p>
-                  {order.address && (
-                    <div style={{ marginTop: "8px", fontSize: "0.85rem", color: "var(--primary)" }}>
-                      <span>📍 Delivered to: </span>
-                      <span style={{ color: "var(--text)", fontWeight: "600" }}>
-                        {order.address.address1}
-                        {order.address.address2 ? `, ${order.address.address2}` : ""}
-                        {order.address.postal_code ? ` (${order.address.postal_code})` : ""}
-                      </span>
-                    </div>
-                  )}
+                  <strong>#{order.id}</strong>
+                  <p className="subtext" style={{ margin: "4px 0 0 0", fontSize: "0.9rem" }}>Ordered on: {new Date(order.created_at).toLocaleDateString()}</p>
                 </div>
                 <div>
-                  <span className={`status-badge ${order.status === "Delivered" ? "status-badge--success" : order.status === "Processing" ? "status-badge--warning" : "status-badge--danger"}`}>
+                  <span className={`status-badge ${order.status === "delivered" || order.status === "completed" ? "status-badge--success" : order.status === "confirmed" || order.status === "shipped" ? "status-badge--warning" : "status-badge--danger"}`}>
                     {order.status}
                   </span>
                   <p className="subtext" style={{ margin: "4px 0 0 0", fontSize: "0.82rem" }}>COD Payment</p>
                 </div>
                 <div style={{ textAlign: "right" }}>
-                  <strong style={{ fontSize: "1.25rem", color: "var(--text)" }}>{order.total}</strong>
+                  <strong style={{ fontSize: "1.25rem", color: "var(--text)" }}>${Number(order.total_price || 0).toFixed(2)}</strong>
+                  {(order.status === "shipped" || order.status === "delivered") && (
+                    <button
+                      className="btn btn-primary"
+                      style={{ marginTop: "10px", width: "100%" }}
+                      onClick={() => confirmDelivery(order.id)}
+                      disabled={updatingOrderId === order.id}
+                    >
+                      {updatingOrderId === order.id
+                        ? "Updating..."
+                        : order.status === "shipped"
+                        ? "Confirm delivery"
+                        : "Mark complete"}
+                    </button>
+                  )}
                 </div>
               </div>
             ))

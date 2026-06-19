@@ -5,6 +5,7 @@ function SellerDashboard() {
   const [products, setProducts] = useState([]);
   const [sellerOrders, setSellerOrders] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [updatingOrderId, setUpdatingOrderId] = useState(null);
 
   const token = localStorage.getItem("accessToken");
 
@@ -63,6 +64,35 @@ function SellerDashboard() {
       Number(product.price || 0) * Number(product.stock || 0),
     0
   );
+
+  const updateOrderStatus = async (orderId, nextStatus) => {
+    if (!token) return;
+    setUpdatingOrderId(orderId);
+
+    try {
+      const response = await fetch(`http://127.0.0.1:8000/api/orders/${orderId}/status/`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ status: nextStatus }),
+      });
+
+      if (!response.ok) {
+        throw new Error("Unable to update order status");
+      }
+
+      const updatedOrder = await response.json();
+      setSellerOrders((current) =>
+        current.map((order) => (order.id === orderId ? { ...order, status: updatedOrder.status } : order))
+      );
+    } catch (error) {
+      console.error("Order status update failed", error);
+    } finally {
+      setUpdatingOrderId(null);
+    }
+  };
 
   if (loading) {
     return <div className="empty-state">Loading dashboard...</div>;
@@ -193,6 +223,29 @@ function SellerDashboard() {
                     <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--border)", paddingTop: "8px", fontWeight: "bold" }}>
                       <span>Subtotal:</span>
                       <span style={{ color: "var(--primary-strong)" }}>${itemsTotal.toFixed(2)}</span>
+                    </div>
+
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "4px" }}>
+                      {order.status === "pending" && (
+                        <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "confirmed")} disabled={updatingOrderId === order.id}>
+                          {updatingOrderId === order.id ? "Updating..." : "Confirm"}
+                        </button>
+                      )}
+                      {order.status === "confirmed" && (
+                        <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "shipped")} disabled={updatingOrderId === order.id}>
+                          {updatingOrderId === order.id ? "Updating..." : "Ship"}
+                        </button>
+                      )}
+                      {order.status === "shipped" && (
+                        <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "delivered")} disabled={updatingOrderId === order.id}>
+                          {updatingOrderId === order.id ? "Updating..." : "Mark Delivered"}
+                        </button>
+                      )}
+                      {order.status === "delivered" && (
+                        <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "completed")} disabled={updatingOrderId === order.id}>
+                          {updatingOrderId === order.id ? "Updating..." : "Complete"}
+                        </button>
+                      )}
                     </div>
                   </div>
                 );

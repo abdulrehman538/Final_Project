@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import "./AuthPage.css";
 
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
+
 function AuthPage({ onLogin }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -71,46 +73,50 @@ function AuthPage({ onLogin }) {
     event.preventDefault();
     setError("");
 
-    const response = await fetch("http://127.0.0.1:8000/api/login/", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: signin.username,
-        password: signin.password,
-      }),
-    });
+    try {
+      const response = await fetch(`${API_BASE_URL}/api/login/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          username: signin.username,
+          password: signin.password,
+        }),
+      });
 
-    const data = await response.json();
+      const data = await response.json().catch(() => ({}));
 
-    if (!response.ok) {
-      setError(data.detail || "Unable to sign in. Please check your credentials.");
-      return;
-    }
+      if (!response.ok) {
+        setError(data.detail || "Unable to sign in. Please check your credentials.");
+        return;
+      }
 
-    const roleResponse = await fetch("http://127.0.0.1:8000/api/user-role/", {
-      headers: { Authorization: `Bearer ${data.access}` },
-    });
+      const roleResponse = await fetch(`${API_BASE_URL}/api/user-role/`, {
+        headers: { Authorization: `Bearer ${data.access}` },
+      });
 
-    const roleData = await roleResponse.json();
-    const role = (roleData.role || "user").toString().toLowerCase();
+      const roleData = await roleResponse.json().catch(() => ({}));
+      const role = (roleData.role || "user").toString().toLowerCase();
 
-    localStorage.setItem("accessToken", data.access);
-    localStorage.setItem("userRole", role);
-    localStorage.setItem("username", signin.username);
+      localStorage.setItem("accessToken", data.access);
+      localStorage.setItem("userRole", role);
+      localStorage.setItem("username", signin.username);
 
-    onLogin(data.access, role, signin.username);
-    // After successful login, redirect to original page if provided
-    const redirectAfterLogin = searchParams.get("redirect");
-    if (redirectAfterLogin) {
-      navigate(redirectAfterLogin);
-    } else {
-      navigate(
-        role === "admin"
-          ? "/dashboard"
-          : role === "seller"
-          ? "/products"
-          : "/marketplace"
-      );
+      onLogin(data.access, role, signin.username);
+      const redirectAfterLogin = searchParams.get("redirect");
+      if (redirectAfterLogin) {
+        navigate(redirectAfterLogin);
+      } else {
+        navigate(
+          role === "admin"
+            ? "/dashboard"
+            : role === "seller"
+            ? "/products"
+            : "/marketplace"
+        );
+      }
+    } catch (error) {
+      console.error("Login failed", error);
+      setError("Unable to reach the server. Please make sure the backend is running.");
     }
   };
 
