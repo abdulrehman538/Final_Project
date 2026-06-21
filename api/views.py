@@ -1,9 +1,12 @@
 from rest_framework import generics, parsers, status
-from rest_framework.permissions import IsAuthenticated, AllowAny
+from rest_framework.permissions import IsAuthenticated, AllowAny, SAFE_METHODS
 from rest_framework.response import Response
 from django.contrib.auth.models import User, Group
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Count, Q, Sum
+from django.utils import timezone
+from datetime import timedelta
+from decimal import Decimal
 from django.shortcuts import get_object_or_404
 
 from .models import (
@@ -17,19 +20,22 @@ from .models import (
     CartItem,
 )
 
+from .stock import aggregate_cart_quantities, deduct_product_stock, restore_order_stock
 from .serializers import (
     ProductSerializer,
     UserRegisterSerializer,
     UserProfileSerializer,
+    AdminStoreSerializer,
+    AdminLowStockProductSerializer,
     ProductCommentSerializer,
     OrderSerializer,
-    OrderItemSerializer,
     ProductImageSerializer,
     CartSerializer,
 )
 
 from .permissions import IsSellerOrAdminOrReadOnly
-from .utils import is_admin, is_seller
+from .authentication import OptionalJWTAuthentication
+from .utils import delete_image_instance, get_user_role, is_admin, is_seller
 
 
 class RegisterView(generics.CreateAPIView):
@@ -50,13 +56,14 @@ class UserRoleView(generics.GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if is_admin(request.user):
-            return Response({"role": "admin"})
-
-        if is_seller(request.user):
-            return Response({"role": "seller"})
-
-        return Response({"role": "buyer"})
+        profile = getattr(request.user, "profile", None)
+        return Response(
+            {
+                "role": get_user_role(request.user),
+                "seller_status": getattr(profile, "seller_status", "none"),
+                "is_seller": bool(getattr(profile, "is_seller", False)),
+            }
+        )
 
 
 class ProductSearchView(generics.ListAPIView):
@@ -160,6 +167,89 @@ class AdminOrdersView(generics.ListAPIView):
         return Order.objects.select_related("buyer").prefetch_related("items").order_by("-created_at")
 
 
+class AdminDashboardStatsView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_admin(request.user):
+            return Response(
+                {"detail": "Only admins can access dashboard stats."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        revenue_total = Order.objects.exclude(status="cancelled").aggregate(
+            total=Sum("total_price")
+        )["total"] or Decimal("0")
+
+        today = timezone.now().date()
+        order_volume = []
+        max_day_total = Decimal("0")
+
+        for offset in range(6, -1, -1):
+            day = today - timedelta(days=offset)
+            day_orders = Order.objects.filter(created_at__date=day)
+            day_total = day_orders.exclude(status="cancelled").aggregate(
+                total=Sum("total_price")
+            )["total"] or Decimal("0")
+            if day_total > max_day_total:
+                max_day_total = day_total
+            order_volume.append({
+                "date": day.isoformat(),
+                "label": day.strftime("%a"),
+                "total": float(day_total),
+                "orders": day_orders.count(),
+            })
+
+        low_stock_products = Product.objects.filter(stock__lte=5).order_by("stock", "name")[:8]
+
+        return Response({
+            "users_count": User.objects.count(),
+            "active_sellers": UserProfile.objects.filter(
+                is_seller=True,
+                seller_status="approved",
+            ).count(),
+            "pending_applications": UserProfile.objects.filter(seller_status="pending").count(),
+            "products_count": Product.objects.count(),
+            "orders_count": Order.objects.count(),
+            "revenue_total": str(revenue_total),
+            "low_stock_count": Product.objects.filter(stock__gt=0, stock__lte=5).count(),
+            "out_of_stock_count": Product.objects.filter(stock=0).count(),
+            "order_volume": order_volume,
+            "order_volume_max": float(max_day_total) if max_day_total > 0 else 1,
+            "low_stock_products": AdminLowStockProductSerializer(
+                low_stock_products,
+                many=True,
+            ).data,
+        })
+
+
+class AdminStoresListView(generics.ListAPIView):
+    serializer_class = AdminStoreSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if not is_admin(self.request.user):
+            return UserProfile.objects.none()
+
+        queryset = UserProfile.objects.filter(
+            is_seller=True,
+            seller_status="approved",
+        ).select_related("user").annotate(
+            product_count=Count("user__products", distinct=True),
+        ).order_by("store_name")
+
+        search = (self.request.query_params.get("q") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(store_name__icontains=search)
+                | Q(user__username__icontains=search)
+                | Q(contact_phone__icontains=search)
+                | Q(business_description__icontains=search)
+            )
+
+        return queryset
+
+
 class OrderStatusUpdateView(generics.GenericAPIView):
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
@@ -188,8 +278,23 @@ class OrderStatusUpdateView(generics.GenericAPIView):
         if new_status not in allowed_transitions.get(order.status, set()):
             return Response({"detail": f"Cannot move from {order.status} to {new_status}."}, status=status.HTTP_400_BAD_REQUEST)
 
-        order.status = new_status
-        order.save(update_fields=["status", "updated_at"])
+        with transaction.atomic():
+            locked_order = Order.objects.select_for_update().prefetch_related("items").get(pk=order.pk)
+            previous_status = locked_order.status
+
+            if new_status not in allowed_transitions.get(previous_status, set()):
+                return Response(
+                    {"detail": f"Cannot move from {previous_status} to {new_status}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if new_status == "cancelled" and previous_status != "cancelled":
+                restore_order_stock(locked_order)
+
+            locked_order.status = new_status
+            locked_order.save(update_fields=["status", "updated_at"])
+            order = locked_order
+
         return Response(self.get_serializer(order).data)
 
 
@@ -199,7 +304,7 @@ class OrderDeliveryConfirmationView(generics.GenericAPIView):
     def post(self, request, pk):
         order = get_object_or_404(Order, pk=pk)
         if order.buyer_id != request.user.id:
-            return Response({"detail": "Only the buyer can confirm delivery."}, status=status.HTTP_403_FORBIDDEN)
+            return Response({"detail": "Only the customer who placed this order can confirm delivery."}, status=status.HTTP_403_FORBIDDEN)
 
         if order.status == "shipped":
             order.status = "delivered"
@@ -221,9 +326,6 @@ class ProductListCreateView(generics.ListCreateAPIView):
         parsers.MultiPartParser,
         parsers.FormParser,
     )
-
-    def get_queryset(self):
-        return super().get_queryset()
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -253,9 +355,6 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
         parsers.FormParser,
     )
 
-    def get_queryset(self):
-        return super().get_queryset()
-
     def perform_update(self, serializer):
         product = serializer.save()
 
@@ -281,7 +380,11 @@ class ProfileView(generics.RetrieveUpdateAPIView):
 
 class ProductCommentListCreateView(generics.ListCreateAPIView):
     serializer_class = ProductCommentSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method in SAFE_METHODS:
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         return ProductComment.objects.filter(
@@ -303,75 +406,161 @@ class ProductImageDetailView(generics.DestroyAPIView):
 
     def delete(self, request, *args, **kwargs):
         obj = self.get_object()
-        # permission: admin or seller owner of the product
         user = request.user
-        if not (is_admin(user) or (is_seller(user) and getattr(obj.product, 'owner_id', None) == user.id)):
-            from rest_framework import status
-            return Response({'detail': 'You do not have permission to delete this image.'}, status=status.HTTP_403_FORBIDDEN)
+        if not (is_admin(user) or (is_seller(user) and getattr(obj.product, "owner_id", None) == user.id)):
+            return Response(
+                {"detail": "You do not have permission to delete this image."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
-        # delete file from storage then delete record
-        try:
-            if obj.image:
-                obj.image.delete(save=False)
-        except Exception:
-            pass
-
-        obj.delete()
-        from rest_framework import status
+        delete_image_instance(obj)
         return Response(status=status.HTTP_204_NO_CONTENT)
 
+
 class CartView(generics.GenericAPIView):
-    """Cart endpoint handling GET, POST, PATCH, DELETE for authenticated users.
-    - GET returns current cart items.
-    - POST adds a product to the cart.
-    - PATCH updates quantity of an existing cart item.
-    - DELETE removes a cart item.
-    """
+    """Server-side cart for authenticated shoppers."""
     permission_classes = [IsAuthenticated]
     serializer_class = CartSerializer
 
     def get_cart(self):
         cart, _ = Cart.objects.get_or_create(user=self.request.user)
-        return cart
+        return Cart.objects.prefetch_related(
+            "items__product__images",
+            "items__product__owner",
+        ).get(pk=cart.pk)
 
     def get(self, request):
-        cart = self.get_cart()
-        serializer = self.get_serializer(cart)
-        return Response(serializer.data)
+        return Response(CartSerializer(self.get_cart()).data)
+
+    def post(self, request):
+        product_id = request.data.get("product_id")
+        if not product_id:
+            return Response({"detail": "product_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            quantity = max(1, int(request.data.get("quantity", 1)))
+        except (TypeError, ValueError):
+            return Response({"detail": "Invalid quantity."}, status=status.HTTP_400_BAD_REQUEST)
+
+        product = get_object_or_404(Product, pk=product_id)
+        cart, _ = Cart.objects.get_or_create(user=request.user)
+        item, created = CartItem.objects.get_or_create(
+            cart=cart,
+            product=product,
+            defaults={"quantity": quantity},
+        )
+
+        if not created:
+            next_qty = item.quantity + quantity
+            if product.stock:
+                next_qty = min(next_qty, product.stock)
+            item.quantity = next_qty
+            item.save(update_fields=["quantity"])
+        elif product.stock and item.quantity > product.stock:
+            item.quantity = product.stock
+            item.save(update_fields=["quantity"])
+
+        return Response(CartSerializer(self.get_cart()).data)
+
+    def patch(self, request):
+        product_id = request.data.get("product_id")
+        if not product_id:
+            return Response({"detail": "product_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            quantity = int(request.data.get("quantity", 1))
+        except (TypeError, ValueError):
+            return Response({"detail": "Invalid quantity."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if quantity <= 0:
+            return self._remove_item(product_id)
+
+        product = get_object_or_404(Product, pk=product_id)
+        cart, _ = Cart.objects.get_or_create(user=request.user)
+        item, _ = CartItem.objects.get_or_create(
+            cart=cart,
+            product=product,
+            defaults={"quantity": quantity},
+        )
+        next_qty = max(quantity, 1)
+        if product.stock:
+            next_qty = min(next_qty, product.stock)
+        item.quantity = next_qty
+        item.save(update_fields=["quantity"])
+        return Response(CartSerializer(self.get_cart()).data)
+
+    def delete(self, request):
+        product_id = request.data.get("product_id") or request.query_params.get("product_id")
+        if product_id:
+            return self._remove_item(product_id)
+
+        cart = Cart.objects.filter(user=request.user).first()
+        if cart:
+            cart.items.all().delete()
+        return Response(CartSerializer(self.get_cart()).data)
+
+    def _remove_item(self, product_id):
+        cart = Cart.objects.filter(user=self.request.user).first()
+        if cart:
+            CartItem.objects.filter(cart=cart, product_id=product_id).delete()
+        return Response(CartSerializer(self.get_cart()).data)
 
 
 class CheckoutView(generics.GenericAPIView):
     """
-    Handles cart checkout:
+    Handles cart checkout for guests and authenticated users.
     - Creates an Order with OrderItems
     - Decreases product stock
     - Validates stock availability
     """
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OptionalJWTAuthentication]
+    permission_classes = [AllowAny]
     serializer_class = OrderSerializer
 
     def post(self, request):
         cart_items = request.data.get('items', [])
 
-        if not cart_items:
+        quantities = aggregate_cart_quantities(cart_items if isinstance(cart_items, list) else [])
+
+        if not quantities:
             return Response(
                 {'detail': 'Cart is empty'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        customer_name = (request.data.get('customer_name') or '').strip()
+        customer_phone = (request.data.get('customer_phone') or '').strip()
+        customer_email = (request.data.get('customer_email') or '').strip()
+        shipping_address = (request.data.get('shipping_address') or '').strip()
+
+        if not request.user.is_authenticated:
+            if not customer_name:
+                return Response(
+                    {'detail': 'Customer name is required for guest checkout.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not shipping_address:
+                return Response(
+                    {'detail': 'Shipping address is required for guest checkout.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         try:
             with transaction.atomic():
-                total_price = 0
                 order_items_data = []
+                total_price = 0
 
-                # Validate all items have sufficient stock
-                for item in cart_items:
-                    product_id = item.get('product_id')
-                    quantity = item.get('quantity', 1)
+                product_ids = sorted(quantities.keys())
+                products = {
+                    product.id: product
+                    for product in Product.objects.select_for_update().filter(id__in=product_ids)
+                }
 
-                    try:
-                        product = Product.objects.get(id=product_id)
-                    except Product.DoesNotExist:
+                for product_id in product_ids:
+                    quantity = quantities[product_id]
+                    product = products.get(product_id)
+
+                    if not product:
                         return Response(
                             {'detail': f'Product {product_id} not found'},
                             status=status.HTTP_404_NOT_FOUND
@@ -379,7 +568,12 @@ class CheckoutView(generics.GenericAPIView):
 
                     if product.stock < quantity:
                         return Response(
-                            {'detail': f'Insufficient stock for {product.name}. Available: {product.stock}'},
+                            {
+                                'detail': (
+                                    f'Insufficient stock for {product.name}. '
+                                    f'Available: {product.stock}, requested: {quantity}'
+                                )
+                            },
                             status=status.HTTP_400_BAD_REQUEST
                         )
 
@@ -392,14 +586,18 @@ class CheckoutView(generics.GenericAPIView):
 
                     total_price += float(product.price) * quantity
 
-                # Create order
+                buyer = request.user if request.user.is_authenticated else None
+
                 order = Order.objects.create(
-                    buyer=request.user,
+                    buyer=buyer,
+                    customer_name=customer_name,
+                    customer_phone=customer_phone,
+                    customer_email=customer_email,
+                    shipping_address=shipping_address,
                     status='pending',
                     total_price=total_price
                 )
 
-                # Create order items and decrease stock
                 for item_data in order_items_data:
                     product = item_data['product']
                     quantity = item_data['quantity']
@@ -412,9 +610,12 @@ class CheckoutView(generics.GenericAPIView):
                         seller=product.owner
                     )
 
-                    # Decrease product stock
-                    product.stock -= quantity
-                    product.save(update_fields=['stock'])
+                    deduct_product_stock(product, quantity)
+
+                if request.user.is_authenticated:
+                    cart = Cart.objects.filter(user=request.user).first()
+                    if cart:
+                        cart.items.all().delete()
 
                 serializer = self.get_serializer(order)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -424,8 +625,10 @@ class CheckoutView(generics.GenericAPIView):
                 {'detail': str(e)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )
+
+
 class OrderListView(generics.ListAPIView):
-    """Get all orders for the authenticated user (buyer)"""
+    """Get all orders placed by the authenticated user."""
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
 
@@ -446,7 +649,7 @@ class SellerOrdersView(generics.ListAPIView):
         # Get all orders that contain items sold by this seller
         return Order.objects.filter(
             items__seller=self.request.user
-        ).distinct().prefetch_related('items').order_by('-created_at')
+        ).distinct().select_related("buyer").prefetch_related("items").order_by("-created_at")
 
 
 class SellerProductsView(generics.ListAPIView):

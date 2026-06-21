@@ -1,7 +1,4 @@
-'''Utility helpers for the api app.'''
-
-from django.db import transaction
-from django.core.exceptions import ObjectDoesNotExist
+"""Utility helpers for the api app."""
 
 
 def is_admin(user):
@@ -28,6 +25,19 @@ def is_seller(user):
             )
         )
     )
+
+
+def get_user_role(user):
+    """Return the official app role for an authenticated user.
+
+    Only ``admin`` and ``seller`` are official roles. Everyone else is a
+    regular account that can browse and purchase without a separate role.
+    """
+    if is_admin(user):
+        return "admin"
+    if is_seller(user):
+        return "seller"
+    return "user"
 
 
 def delete_image_instance(instance):

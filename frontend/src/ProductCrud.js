@@ -1,7 +1,12 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
+import { fetchWithAuth } from "./utils/authSession";
 import "./ProductCrud.css";
 
-function ProductCrud({ role = "buyer" }) {
+const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
+
+function ProductCrud({ role = "user" }) {
+  const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [profileStoreName, setProfileStoreName] = useState("");
   const [name, setName] = useState("");
@@ -15,16 +20,13 @@ function ProductCrud({ role = "buyer" }) {
   const [searchQuery, setSearchQuery] = useState("");
   const [sortBy, setSortBy] = useState("default");
   const [loading, setLoading] = useState(false);
-  const [error, setError] = useState("");
+  const [successMessage, setSuccessMessage] = useState("");
 
-  // Modals & User Feedback states
   const [showAddModal, setShowAddModal] = useState(false);
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
-  const [successMessage, setSuccessMessage] = useState("");
 
-  const token = localStorage.getItem("accessToken");
   const isSeller = role === "seller";
 
   useEffect(() => {
@@ -34,11 +36,7 @@ function ProductCrud({ role = "buyer" }) {
       }
 
       try {
-        const response = await fetch("http://127.0.0.1:8000/api/profile/", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const response = await fetchWithAuth(`${API_BASE}/api/profile/`);
 
         if (response.ok) {
           const data = await response.json();
@@ -53,23 +51,18 @@ function ProductCrud({ role = "buyer" }) {
     };
 
     loadProfile();
-  }, [isSeller, token]);
+  }, [isSeller]);
 
   const getProducts = async () => {
     setLoading(true);
-    setError("");
 
     try {
       // Use different endpoint based on role
-      const endpoint = isSeller 
-        ? "http://127.0.0.1:8000/api/seller-products/"
-        : "http://127.0.0.1:8000/api/products/";
+      const endpoint = isSeller
+        ? `${API_BASE}/api/seller-products/`
+        : `${API_BASE}/api/products/`;
 
-      const response = await fetch(endpoint, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
+      const response = await fetchWithAuth(endpoint);
 
       if (!response.ok) {
         const text = await response.text().catch(() => "");
@@ -82,7 +75,6 @@ function ProductCrud({ role = "buyer" }) {
       setProducts(Array.isArray(data) ? data : []);
     } catch (err) {
       console.error("getProducts error:", err);
-      setError(err.message || "Failed to fetch products.");
     } finally {
       setLoading(false);
     }
@@ -93,11 +85,8 @@ function ProductCrud({ role = "buyer" }) {
   }, [role]);
 
   const deleteProduct = async (id) => {
-    await fetch(`http://127.0.0.1:8000/api/products/${id}/`, {
+    await fetchWithAuth(`${API_BASE}/api/products/${id}/`, {
       method: "DELETE",
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
     });
 
     await getProducts();
@@ -123,16 +112,12 @@ function ProductCrud({ role = "buyer" }) {
 
   const createProduct = async () => {
     setLoading(true);
-    setError("");
 
     try {
       const formData = buildFormData();
 
-      const response = await fetch("http://127.0.0.1:8000/api/products/", {
+      const response = await fetchWithAuth(`${API_BASE}/api/products/`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
         body: formData,
       });
 
@@ -152,44 +137,19 @@ function ProductCrud({ role = "buyer" }) {
       await getProducts();
     } catch (err) {
       console.error("createProduct error:", err);
-      setError(err.message || "Failed to create product.");
     } finally {
       setLoading(false);
     }
   };
 
-  const startEdit = (product) => {
-    setEditId(product.id);
-    setName(product.name);
-    setDescription(product.description || "");
-    setPrice(product.price);
-    setStock(product.stock ?? "");
-    setCategory(product.category || "");
-    setStoreName(product.store_name || "");
-
-    const existing = (product.images || []).map((img) => ({
-      id: `exist-${img.id}`,
-      name: img.image ? img.image.split('/').pop() : `img-${img.id}`,
-      existing: true,
-      recordId: img.id,
-      url: img.image,
-    }));
-
-    setImages(existing);
-  };
-
   const updateProduct = async () => {
     setLoading(true);
-    setError("");
 
     try {
       const formData = buildFormData();
 
-      const response = await fetch(`http://127.0.0.1:8000/api/products/${editId}/`, {
+      const response = await fetchWithAuth(`${API_BASE}/api/products/${editId}/`, {
         method: "PATCH",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
         body: formData,
       });
 
@@ -209,7 +169,6 @@ function ProductCrud({ role = "buyer" }) {
       await getProducts();
     } catch (err) {
       console.error("updateProduct error:", err);
-      setError(err.message || "Failed to update product.");
     } finally {
       setLoading(false);
     }
@@ -246,11 +205,8 @@ function ProductCrud({ role = "buyer" }) {
   const deleteProductImage = async (recordId) => {
     if (!recordId) return;
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/product-images/${recordId}/`, {
+      const response = await fetchWithAuth(`${API_BASE}/api/product-images/${recordId}/`, {
         method: "DELETE",
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
       });
 
       if (!response.ok) {
@@ -269,7 +225,6 @@ function ProductCrud({ role = "buyer" }) {
       }
     } catch (err) {
       console.error("deleteProductImage error:", err);
-      setError(err.message || "Failed to delete product image.");
     }
   };
 
@@ -312,14 +267,25 @@ function ProductCrud({ role = "buyer" }) {
           <div>
             <h2>{isSeller ? `${profileStoreName || "My Store"} Products` : "Product Catalog"}</h2>
           </div>
-          <div className="catalog-metrics">
-            <div className="catalog-metric">
-              <strong>{products.length}</strong>
-              <span>Items</span>
-            </div>
-            <div className="catalog-metric">
-              <strong>{products.reduce((sum, p) => sum + Number(p.stock || 0), 0)}</strong>
-              <span>Stock</span>
+          <div className="store-header__actions">
+            {isSeller && (
+              <button
+                type="button"
+                className="store-orders-btn"
+                onClick={() => navigate("/seller-orders")}
+              >
+                Orders
+              </button>
+            )}
+            <div className="catalog-metrics">
+              <div className="catalog-metric">
+                <strong>{products.length}</strong>
+                <span>Items</span>
+              </div>
+              <div className="catalog-metric">
+                <strong>{products.reduce((sum, p) => sum + Number(p.stock || 0), 0)}</strong>
+                <span>Stock</span>
+              </div>
             </div>
           </div>
         </header>

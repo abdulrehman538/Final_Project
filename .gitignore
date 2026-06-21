@@ -5,7 +5,10 @@ __pycache__/
 *.pyd
 *.sqlite3
 /db.sqlite3
-/media/
+/media/*
+!/media/.gitkeep
+!/media/products/
+!/media/products/.gitkeep
 .DS_Store
 node_modules/
 frontend/node_modules/

@@ -1,23 +1,53 @@
 import { useEffect, useState } from "react";
+import { useLocation } from "react-router-dom";
+import { fetchWithAuth, getAccessToken } from "../utils/authSession";
+import { getProductMeta, resolveProductImage } from "../utils/productImage";
 import "./SellerDashboard.css";
 
+const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
+
+const ORDER_ACTIONS = {
+  pending: { label: "Confirm", next: "confirmed" },
+  confirmed: { label: "Ship", next: "shipped" },
+  shipped: { label: "Delivered", next: "delivered" },
+  delivered: { label: "Complete", next: "completed" },
+};
+
+const REJECTABLE_STATUSES = new Set(["pending", "confirmed", "shipped", "delivered"]);
+
+function formatOrderDate(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+  });
+}
+
+function getStatusClass(status) {
+  const normalized = (status || "pending").toLowerCase();
+  if (["delivered", "completed", "cancelled", "confirmed", "shipped", "pending"].includes(normalized)) {
+    return `sd-status--${normalized}`;
+  }
+  return "sd-status--pending";
+}
+
 function SellerDashboard() {
+  const location = useLocation();
   const [products, setProducts] = useState([]);
   const [sellerOrders, setSellerOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [updatingOrderId, setUpdatingOrderId] = useState(null);
 
-  const token = localStorage.getItem("accessToken");
-
   useEffect(() => {
     const loadSellerData = async () => {
+      if (!getAccessToken()) {
+        setLoading(false);
+        return;
+      }
+
       try {
-        // Fetch seller's own products
-        const productsRes = await fetch("http://127.0.0.1:8000/api/seller-products/", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const productsRes = await fetchWithAuth(`${API_BASE}/api/seller-products/`);
 
         if (productsRes.ok) {
           const productsData = await productsRes.json();
@@ -26,12 +56,7 @@ function SellerDashboard() {
           setProducts([]);
         }
 
-        // Fetch seller's orders
-        const ordersRes = await fetch("http://127.0.0.1:8000/api/seller-orders/", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const ordersRes = await fetchWithAuth(`${API_BASE}/api/seller-orders/`);
 
         if (ordersRes.ok) {
           const ordersData = await ordersRes.json();
@@ -49,32 +74,39 @@ function SellerDashboard() {
     };
 
     loadSellerData();
-  }, [token]);
+  }, []);
+
+  useEffect(() => {
+    if (!location.state?.focusOrders) {
+      return undefined;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      document.getElementById("seller-orders")?.scrollIntoView({
+        behavior: "smooth",
+        block: "start",
+      });
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [location.state]);
 
   const totalProducts = products.length;
-
-  const totalStock = products.reduce(
-    (sum, product) => sum + Number(product.stock || 0),
-    0
-  );
-
+  const totalStock = products.reduce((sum, product) => sum + Number(product.stock || 0), 0);
   const inventoryValue = products.reduce(
-    (sum, product) =>
-      sum +
-      Number(product.price || 0) * Number(product.stock || 0),
+    (sum, product) => sum + Number(product.price || 0) * Number(product.stock || 0),
     0
   );
 
   const updateOrderStatus = async (orderId, nextStatus) => {
-    if (!token) return;
+    if (!getAccessToken()) return;
     setUpdatingOrderId(orderId);
 
     try {
-      const response = await fetch(`http://127.0.0.1:8000/api/orders/${orderId}/status/`, {
+      const response = await fetchWithAuth(`${API_BASE}/api/orders/${orderId}/status/`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({ status: nextStatus }),
       });
@@ -99,157 +131,156 @@ function SellerDashboard() {
   }
 
   return (
-    <div className="dashboard-page">
-      <section className="dashboard-grid">
-        <div className="dashboard-card">
-          <p className="eyebrow">Products</p>
-          <h3>{totalProducts}</h3>
-          <span className="subtext">Products in your store</span>
-        </div>
-
-        <div className="dashboard-card">
-          <p className="eyebrow">Total Stock</p>
-          <h3>{totalStock}</h3>
-          <span className="subtext">Units available</span>
-        </div>
-
-        <div className="dashboard-card">
-          <p className="eyebrow">Inventory Value</p>
-          <h3>${inventoryValue.toFixed(2)}</h3>
-          <span className="subtext">Current inventory worth</span>
-        </div>
+    <div className="seller-dashboard">
+      <section className="sd-stats">
+        <article className="sd-stat">
+          <p className="sd-stat__label">Products</p>
+          <p className="sd-stat__value">{totalProducts}</p>
+          <span className="sd-stat__hint">In your store</span>
+        </article>
+        <article className="sd-stat">
+          <p className="sd-stat__label">Stock</p>
+          <p className="sd-stat__value">{totalStock}</p>
+          <span className="sd-stat__hint">Units available</span>
+        </article>
+        <article className="sd-stat">
+          <p className="sd-stat__label">Inventory</p>
+          <p className="sd-stat__value">${inventoryValue.toFixed(0)}</p>
+          <span className="sd-stat__hint">${inventoryValue.toFixed(2)} total value</span>
+        </article>
       </section>
 
-      <section className="dashboard-panels">
-        <article className="stat-card">
-          <div className="panel-header">
+      <section className="sd-panels">
+        <article className="sd-panel">
+          <header className="sd-panel__head">
             <div>
-              <p className="eyebrow">Products</p>
+              <p className="sd-panel__eyebrow">Catalog</p>
               <h2>Recent products</h2>
             </div>
-            <span className="pill">
-              {products.length} Items
-            </span>
-          </div>
+            <span className="sd-panel__count">{products.length}</span>
+          </header>
 
-          <div className="table-card">
+          <div className="sd-panel__body sd-panel__body--scroll">
             {products.length === 0 ? (
-              <div className="empty-state">
-                No products added yet.
-              </div>
+              <div className="sd-empty">No products added yet.</div>
             ) : (
-              products.slice(0, 5).map((product) => (
-                <div
-                  className="table-row"
-                  key={product.id}
-                >
-                  <div>
-                    <strong>{product.name}</strong>
-                    <p className="subtext">
-                      {product.category || "Uncategorized"}
-                    </p>
-                  </div>
-
-                  <span className="status-badge status-badge--success">
-                    Stock {product.stock || 0}
-                  </span>
-
-                  <strong>${product.price}</strong>
-                </div>
-              ))
+              <ul className="sd-product-list">
+                {products.slice(0, 10).map((product) => {
+                  const meta = getProductMeta(product);
+                  return (
+                    <li className="sd-product-row" key={product.id}>
+                      <img
+                        className="sd-product-row__thumb"
+                        src={resolveProductImage(product, "120x120")}
+                        alt=""
+                      />
+                      <div className="sd-product-row__info">
+                        <p className="sd-product-row__name">{product.name}</p>
+                        <p className="sd-product-row__meta">{meta.category}</p>
+                      </div>
+                      <span className={`sd-stock sd-stock--${meta.stockTone}`}>
+                        {meta.stockLabel}
+                      </span>
+                      <span className="sd-product-row__price">${Number(product.price || 0).toFixed(2)}</span>
+                    </li>
+                  );
+                })}
+              </ul>
             )}
           </div>
         </article>
 
-        <article className="stat-card">
-          <div className="panel-header">
+        <article className="sd-panel" id="seller-orders">
+          <header className="sd-panel__head">
             <div>
-              <p className="eyebrow">Analytics</p>
-              <h2>Orders overview</h2>
+              <p className="sd-panel__eyebrow">Orders</p>
+              <h2>Overview</h2>
             </div>
-            <span className="pill">
-              {sellerOrders.length} Orders
-            </span>
-          </div>
+            <span className="sd-panel__count">{sellerOrders.length}</span>
+          </header>
 
-          <div className="table-card" style={{ display: "flex", flexDirection: "column", gap: "16px", maxHeight: "450px", overflowY: "auto", padding: "10px 0" }}>
+          <div className="sd-panel__body sd-panel__body--scroll">
             {sellerOrders.length === 0 ? (
-              <div className="empty-state">
-                No orders placed on your store yet.
-              </div>
+              <div className="sd-empty">No orders on your store yet.</div>
             ) : (
-              sellerOrders.map((order) => {
-                const orderDate = new Date(order.created_at).toLocaleDateString();
-                const itemsTotal = order.items.reduce((sum, item) => sum + (Number(item.price || 0) * item.quantity), 0);
-                
-                return (
-                  <div
-                    className="seller-order-card"
-                    key={order.id}
-                    style={{
-                      padding: "16px",
-                      borderRadius: "16px",
-                      background: "var(--surface-soft)",
-                      border: "1px solid var(--border)",
-                      display: "flex",
-                      flexDirection: "column",
-                      gap: "10px",
-                    }}
-                  >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", borderBottom: "1px solid var(--border)", paddingBottom: "8px" }}>
-                      <span><strong>Order {order.id}</strong> ({orderDate})</span>
-                      <span className="status-badge status-badge--success" style={{ textTransform: "capitalize" }}>{order.status}</span>
-                    </div>
+              <div className="sd-order-list">
+                {sellerOrders.map((order) => {
+                  const itemsTotal = order.items.reduce(
+                    (sum, item) => sum + Number(item.price || 0) * item.quantity,
+                    0
+                  );
+                  const action = ORDER_ACTIONS[order.status];
+                  const customer =
+                    order.display_customer ||
+                    order.customer_username ||
+                    order.customer_name ||
+                    "Guest";
 
-                    <div style={{ fontSize: "0.88rem", display: "grid", gap: "4px" }}>
-                      <p style={{ margin: 0 }}><strong>Buyer:</strong> {order.buyer_username}</p>
-                      <p style={{ margin: 0 }}>
-                        <strong>Total Amount:</strong> ${Number(order.total_price || 0).toFixed(2)}
-                      </p>
-                    </div>
+                  return (
+                    <article className="sd-order-card" key={order.id}>
+                      <div className="sd-order-card__top">
+                        <div>
+                          <p className="sd-order-card__id">Order #{order.id}</p>
+                          <p className="sd-order-card__date">{formatOrderDate(order.created_at)}</p>
+                        </div>
+                        <span className={`sd-status ${getStatusClass(order.status)}`}>
+                          {order.status}
+                        </span>
+                      </div>
 
-                    <div style={{ borderTop: "1px dashed var(--border)", paddingTop: "8px" }}>
-                      <strong style={{ fontSize: "0.85rem", display: "block", marginBottom: "4px" }}>Items from Your Store:</strong>
-                      <div style={{ display: "grid", gap: "4px" }}>
+                      <div className="sd-order-card__summary">
+                        <span>
+                          Customer: <strong>{customer}</strong>
+                        </span>
+                        <span>
+                          Order total: <strong>${Number(order.total_price || 0).toFixed(2)}</strong>
+                        </span>
+                      </div>
+
+                      <div className="sd-order-items">
                         {order.items.map((item, idx) => (
-                          <div key={idx} style={{ display: "flex", justifyContent: "space-between", fontSize: "0.85rem" }}>
-                            <span style={{ color: "var(--muted)" }}>{item.product_name} (x{item.quantity})</span>
-                            <strong>${(Number(item.price || 0) * item.quantity).toFixed(2)}</strong>
+                          <div className="sd-order-item" key={`${order.id}-${idx}`}>
+                            <span className="sd-order-item__name">
+                              {item.product_name} × {item.quantity}
+                            </span>
+                            <span className="sd-order-item__price">
+                              ${(Number(item.price || 0) * item.quantity).toFixed(2)}
+                            </span>
                           </div>
                         ))}
                       </div>
-                    </div>
 
-                    <div style={{ display: "flex", justifyContent: "space-between", borderTop: "1px solid var(--border)", paddingTop: "8px", fontWeight: "bold" }}>
-                      <span>Subtotal:</span>
-                      <span style={{ color: "var(--primary-strong)" }}>${itemsTotal.toFixed(2)}</span>
-                    </div>
-
-                    <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", marginTop: "4px" }}>
-                      {order.status === "pending" && (
-                        <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "confirmed")} disabled={updatingOrderId === order.id}>
-                          {updatingOrderId === order.id ? "Updating..." : "Confirm"}
-                        </button>
-                      )}
-                      {order.status === "confirmed" && (
-                        <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "shipped")} disabled={updatingOrderId === order.id}>
-                          {updatingOrderId === order.id ? "Updating..." : "Ship"}
-                        </button>
-                      )}
-                      {order.status === "shipped" && (
-                        <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "delivered")} disabled={updatingOrderId === order.id}>
-                          {updatingOrderId === order.id ? "Updating..." : "Mark Delivered"}
-                        </button>
-                      )}
-                      {order.status === "delivered" && (
-                        <button className="btn btn-primary" onClick={() => updateOrderStatus(order.id, "completed")} disabled={updatingOrderId === order.id}>
-                          {updatingOrderId === order.id ? "Updating..." : "Complete"}
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                );
-              })
+                      <div className="sd-order-card__footer">
+                        <span className="sd-order-card__subtotal">
+                          Your items: <strong>${itemsTotal.toFixed(2)}</strong>
+                        </span>
+                        <div className="sd-order-card__actions">
+                          {action && (
+                            <button
+                              type="button"
+                              className="sd-order-btn"
+                              onClick={() => updateOrderStatus(order.id, action.next)}
+                              disabled={updatingOrderId === order.id}
+                            >
+                              {updatingOrderId === order.id ? "Updating…" : action.label}
+                            </button>
+                          )}
+                          {REJECTABLE_STATUSES.has(order.status) && (
+                            <button
+                              type="button"
+                              className="sd-order-btn sd-order-btn--danger"
+                              onClick={() => updateOrderStatus(order.id, "cancelled")}
+                              disabled={updatingOrderId === order.id}
+                            >
+                              Reject
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </article>
+                  );
+                })}
+              </div>
             )}
           </div>
         </article>

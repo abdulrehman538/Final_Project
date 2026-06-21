@@ -16,8 +16,60 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 16px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 18px;
+}
+
+.store-header__actions {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-shrink: 0;
+}
+
+.catalog-metrics {
+  display: flex;
+  gap: 10px;
+}
+
+.catalog-metric {
+  display: grid;
+  gap: 2px;
+  min-width: 72px;
+  padding: 8px 12px;
+  border-radius: 12px;
+  text-align: center;
+  background: var(--surface-soft);
+  border: 1px solid var(--border);
+}
+
+.catalog-metric strong {
+  font-size: 1.05rem;
+}
+
+.catalog-metric span {
+  font-size: 0.75rem;
+  color: var(--muted);
+}
+
+.store-orders-btn {
+  border: 1px solid rgba(245, 114, 36, 0.35);
+  border-radius: 12px;
+  padding: 10px 18px;
+  background: linear-gradient(135deg, #f57224, #ff8f3c);
+  color: #fff;
+  font-size: 0.84rem;
+  font-weight: 800;
+  cursor: pointer;
+  white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(245, 114, 36, 0.22);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.store-orders-btn:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 18px rgba(245, 114, 36, 0.28);
 }
 
 .store-sidebar {

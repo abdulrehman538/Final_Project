@@ -1,5 +1,9 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { fetchWithAuth } from "../utils/authSession";
+import { isAdmin, normalizeRole } from "../utils/roles";
+
+const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
 
 const emptyProfile = {
   full_name: "",
@@ -19,7 +23,6 @@ const emptyProfile = {
 
 function ProfilePage({ onBecomeSeller }) {
   const navigate = useNavigate();
-  const token = localStorage.getItem("accessToken");
   const [profile, setProfile] = useState(emptyProfile);
   const [addressFields, setAddressFields] = useState({
     detail: "",
@@ -39,6 +42,8 @@ function ProfilePage({ onBecomeSeller }) {
   });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const isAdminUser = isAdmin(normalizeRole(localStorage.getItem("userRole")));
+  const showBecomeSellerSection = !profile.is_seller && !isAdminUser;
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -46,11 +51,7 @@ function ProfilePage({ onBecomeSeller }) {
       setError("");
 
       try {
-        const response = await fetch("http://127.0.0.1:8000/api/profile/", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const response = await fetchWithAuth(`${API_BASE}/api/profile/`);
 
         if (!response.ok) {
           throw new Error("Unable to load profile");
@@ -97,7 +98,7 @@ function ProfilePage({ onBecomeSeller }) {
     };
 
     loadProfile();
-  }, [token]);
+  }, []);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
@@ -132,11 +133,10 @@ function ProfilePage({ onBecomeSeller }) {
     };
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/profile/", {
+      const response = await fetchWithAuth(`${API_BASE}/api/profile/`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(updatedProfile),
       });
@@ -195,11 +195,10 @@ function ProfilePage({ onBecomeSeller }) {
     setMessage("");
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/profile/", {
+      const response = await fetchWithAuth(`${API_BASE}/api/profile/`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           ...profile,
@@ -249,11 +248,15 @@ function ProfilePage({ onBecomeSeller }) {
         <div className="profile-panel">
           <p className="eyebrow">Profile</p>
           <h2>Manage your account details</h2>
-          <p className="subtext">Edit your contact information, bio, and public seller details.</p>
+          <p className="subtext">
+            {isAdminUser
+              ? "Edit your contact information and account details."
+              : "Edit your contact information, bio, and public seller details."}
+          </p>
 
           <div className="profile-avatar">{(profile.username || "U").slice(0, 1).toUpperCase()}</div>
 
-          {!profile.is_seller && (
+          {showBecomeSellerSection && (
             <div className="seller-upgrade-box">
               <p className="eyebrow">Want to become seller?</p>
               <p className="subtext">Set up your store profile and review the seller terms before you start listing products.</p>
@@ -289,7 +292,7 @@ function ProfilePage({ onBecomeSeller }) {
                       <span className="pill pill-soft">Why sellers use this</span>
                       <ul className="seller-upgrade-benefits">
                         <li>List and manage your own products from one dashboard.</li>
-                        <li>Show buyers a clear store identity and contact details.</li>
+                        <li>Show customers a clear store identity and contact details.</li>
                         <li>Build trust with a verified seller agreement and terms.</li>
                       </ul>
                     </div>
@@ -312,7 +315,7 @@ function ProfilePage({ onBecomeSeller }) {
                         className="field-input"
                         name="business_description"
                         rows="4"
-                        placeholder="Tell buyers what you sell and what makes your store unique"
+                        placeholder="Tell customers what you sell and what makes your store unique"
                         value={sellerForm.business_description}
                         onChange={handleSellerFieldChange}
                       />

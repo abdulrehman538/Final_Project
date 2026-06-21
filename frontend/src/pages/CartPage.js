@@ -1,26 +1,44 @@
-import { useState, useEffect } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import { getProductMeta, resolveProductImage } from "../utils/productImage";
+import { fetchWithAuth, getAccessToken } from "../utils/authSession";
 import "./CartPage.css";
 
-function CartPage({ cart = [], onUpdateQuantity, onRemoveItem, onClearCart }) {
+const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
+const SHIPPING_FEE = 12.99;
+const TAX_RATE = 0.08;
+
+function CartSkeleton() {
+  return (
+    <div className="ct-skeleton">
+      <div className="ct-skeleton__thumb" />
+      <div className="ct-skeleton__lines">
+        <div className="ct-skeleton__line ct-skeleton__line--short" />
+        <div className="ct-skeleton__line" />
+        <div className="ct-skeleton__line" />
+      </div>
+      <div className="ct-skeleton__qty" />
+    </div>
+  );
+}
+
+function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onClearCart, onSyncCart }) {
   const location = useLocation();
   const navigate = useNavigate();
-  // Open checkout modal if navigation state indicates so
-  useEffect(() => {
-    if (location.state && location.state.openCheckout) {
-      handleOpenCheckout();
-      // Clear the state to avoid re-trigger on re-renders
-      navigate(location.pathname, { replace: true });
-    }
-  }, [location.state]);
-  const [loadingProfile, setLoadingProfile] = useState(false);
-  const [profile, setProfile] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [liveCart, setLiveCart] = useState([]);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [orderSuccess, setOrderSuccess] = useState(false);
   const [newOrderId, setNewOrderId] = useState("");
-  // Modal visibility state for checkout
+  const [completedTotal, setCompletedTotal] = useState(0);
+  const [checkoutPending, setCheckoutPending] = useState(false);
   const [showModal, setShowModal] = useState(false);
-  // Address fields for checkout form
+  const [customerFields, setCustomerFields] = useState({
+    name: "",
+    phone: "",
+    email: "",
+  });
   const [addressFields, setAddressFields] = useState({
     detail: "",
     address1: "",
@@ -28,65 +46,180 @@ function CartPage({ cart = [], onUpdateQuantity, onRemoveItem, onClearCart }) {
     address3: "",
     postal_code: "",
   });
+  const onSyncCartRef = useRef(onSyncCart);
 
-  const subtotal = cart.reduce((sum, item) => sum + Number(item.price || 0) * item.quantity, 0);
-  const shipping = cart.length ? 12.99 : 0;
-  const tax = subtotal * 0.08;
-  const total = subtotal + shipping + tax;
+  useEffect(() => {
+    onSyncCartRef.current = onSyncCart;
+  }, [onSyncCart]);
 
-  const handleOpenCheckout = async () => {
-    const token = localStorage.getItem("accessToken");
-    if (!token) {
-      navigate("/login");
+  const stripCartFlags = (item) => {
+    const { _savedPrice, _unavailable, _priceChanged, _qtyAdjusted, _stale, ...rest } = item;
+    return rest;
+  };
+
+  const hydrateCart = useCallback(async () => {
+    if (!cart.length) {
+      setLiveCart([]);
+      setError("");
+      setLoading(false);
       return;
     }
 
-    setShowModal(true);
-    setLoadingProfile(true);
-    setOrderSuccess(false);
+    setLoading(true);
+    setError("");
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/profile/", {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      if (response.ok) {
-        const data = await response.json();
-        setProfile(data);
-        if (data.address) {
-          try {
-            const parsed = JSON.parse(data.address);
-            setAddressFields({
-              detail: parsed.detail || "",
-              address1: parsed.address1 || "",
-              address2: parsed.address2 || "",
-              address3: parsed.address3 || "",
-              postal_code: parsed.postal_code || "",
-            });
-          } catch {
-            setAddressFields({
-              detail: "",
-              address1: data.address || "",
-              address2: "",
-              address3: "",
-              postal_code: "",
-            });
-          }
-        }
+      const response = await fetch(`${API_BASE}/api/products/`);
+      if (!response.ok) {
+        throw new Error("Could not load live product data.");
       }
-    } catch (e) {
-      console.error("Failed to load profile for checkout", e);
-    } finally {
-      setLoadingProfile(false);
-    }
-  };
 
-  const handleConfirmOrder = async (e) => {
-    e.preventDefault();
+      const data = await response.json();
+      const catalog = Array.isArray(data) ? data : data.results || [];
+      const catalogById = new Map(catalog.map((product) => [String(product.id), product]));
+
+      const hydrated = cart.map((savedItem) => {
+        const fresh = catalogById.get(String(savedItem.id));
+        if (!fresh) {
+          return {
+            ...savedItem,
+            _unavailable: true,
+          };
+        }
+
+        const stock = Number(fresh.stock);
+        const maxQty = Number.isFinite(stock) ? stock : savedItem.quantity;
+        const quantity = Math.min(savedItem.quantity, Math.max(maxQty, 0));
+        const savedPrice = Number(savedItem.price || 0);
+        const livePrice = Number(fresh.price || 0);
+
+        return {
+          ...fresh,
+          quantity: quantity > 0 ? quantity : savedItem.quantity,
+          _savedPrice: savedPrice,
+          _priceChanged: Math.abs(savedPrice - livePrice) > 0.009,
+          _qtyAdjusted: quantity < savedItem.quantity,
+          _unavailable: maxQty <= 0,
+        };
+      });
+
+      setLiveCart(hydrated);
+
+      const cleaned = hydrated.map(stripCartFlags);
+      const cartChanged =
+        cleaned.length !== cart.length ||
+        cleaned.some((item) => {
+          const saved = cart.find((entry) => String(entry.id) === String(item.id));
+          return (
+            !saved ||
+            saved.quantity !== item.quantity ||
+            Number(saved.price || 0) !== Number(item.price || 0) ||
+            saved.name !== item.name
+          );
+        });
+
+      if (cartChanged && typeof onSyncCartRef.current === "function") {
+        onSyncCartRef.current(cleaned);
+      }
+    } catch (err) {
+      setError(err.message || "Failed to refresh cart items.");
+      setLiveCart(
+        cart.map((item) => ({
+          ...item,
+          _stale: true,
+        }))
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, [cart]);
+
+  useEffect(() => {
+    hydrateCart();
+  }, [hydrateCart]);
+
+  const availableItems = useMemo(
+    () => liveCart.filter((item) => !item._unavailable && getProductMeta(item).stock > 0),
+    [liveCart]
+  );
+
+  const unavailableItems = useMemo(
+    () => liveCart.filter((item) => item._unavailable || getProductMeta(item).stock <= 0),
+    [liveCart]
+  );
+
+  const totals = useMemo(() => {
+    const subtotal = availableItems.reduce(
+      (sum, item) => sum + Number(item.price || 0) * item.quantity,
+      0
+    );
+    const units = availableItems.reduce((sum, item) => sum + item.quantity, 0);
+    const shipping = availableItems.length ? SHIPPING_FEE : 0;
+    const tax = subtotal * TAX_RATE;
+
+    return {
+      items: availableItems.length,
+      units,
+      subtotal,
+      shipping,
+      tax,
+      total: subtotal + shipping + tax,
+    };
+  }, [availableItems]);
+
+  const hasPriceChanges = useMemo(
+    () => liveCart.some((item) => item._priceChanged),
+    [liveCart]
+  );
+
+  const hasQtyAdjustments = useMemo(
+    () => liveCart.some((item) => item._qtyAdjusted),
+    [liveCart]
+  );
+
+  const handleOpenCheckout = useCallback(() => {
+    if (!availableItems.length) {
+      return false;
+    }
+    setShowModal(true);
+    setOrderSuccess(false);
+    return true;
+  }, [availableItems.length]);
+
+  useEffect(() => {
+    const buyNow = location.state?.buyNow;
+    if (buyNow?.product && typeof onAddToCart === "function") {
+      onAddToCart(buyNow.product, buyNow.quantity || 1);
+      setCheckoutPending(true);
+      navigate(location.pathname, { replace: true, state: {} });
+      return;
+    }
+
+    if (location.state?.openCheckout) {
+      setCheckoutPending(true);
+      navigate(location.pathname, { replace: true, state: {} });
+    }
+  }, [location.state, location.pathname, navigate, onAddToCart]);
+
+  useEffect(() => {
+    if (!checkoutPending || loading) {
+      return;
+    }
+
+    if (!availableItems.length) {
+      window.alert("This item is not available for checkout right now.");
+      setCheckoutPending(false);
+      return;
+    }
+
+    handleOpenCheckout();
+    setCheckoutPending(false);
+  }, [checkoutPending, loading, availableItems.length, handleOpenCheckout]);
+
+  const handleConfirmOrder = async (event) => {
+    event.preventDefault();
     setPlacingOrder(true);
 
-    const token = localStorage.getItem("accessToken");
     const addressJson = JSON.stringify({
       detail: addressFields.detail,
       address1: addressFields.address1,
@@ -95,51 +228,39 @@ function CartPage({ cart = [], onUpdateQuantity, onRemoveItem, onClearCart }) {
       postal_code: addressFields.postal_code,
     });
 
-    // Update profile with checkout address
-    if (token && profile) {
-      try {
-        await fetch("http://127.0.0.1:8000/api/profile/", {
-          method: "PATCH",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({
-            ...profile,
-            address: addressJson,
-          }),
-        });
-      } catch (err) {
-        console.error("Failed to update checkout address to profile", err);
-      }
-    }
-
-    // Call backend checkout endpoint
     try {
-      const checkoutItems = cart.map((item) => ({
+      const checkoutItems = availableItems.map((item) => ({
         product_id: item.id,
         quantity: item.quantity,
       }));
 
-      const checkoutResponse = await fetch("http://127.0.0.1:8000/api/checkout/", {
+      const checkoutResponse = await fetchWithAuth(`${API_BASE}/api/checkout/`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ items: checkoutItems }),
+        body: JSON.stringify({
+          items: checkoutItems,
+          customer_name: customerFields.name.trim(),
+          customer_phone: customerFields.phone.trim(),
+          customer_email: customerFields.email.trim(),
+          shipping_address: addressJson,
+        }),
       });
 
       if (!checkoutResponse.ok) {
-        const errorData = await checkoutResponse.json();
-        alert(`Checkout failed: ${errorData.detail || "Unknown error"}`);
+        const errorData = await checkoutResponse.json().catch(() => ({}));
+        const message =
+          errorData.detail ||
+          (Array.isArray(errorData) ? errorData.join(", ") : null) ||
+          "Checkout failed. Please try again.";
+        window.alert(`Checkout failed: ${message}`);
         setPlacingOrder(false);
         return;
       }
 
       const backendOrder = await checkoutResponse.json();
       const generatedOrderId = backendOrder.id;
-
       const orderDate = new Date().toLocaleDateString("en-US", {
         month: "short",
         day: "2-digit",
@@ -149,16 +270,18 @@ function CartPage({ cart = [], onUpdateQuantity, onRemoveItem, onClearCart }) {
       const newOrder = {
         id: generatedOrderId,
         status: backendOrder.status,
-        total: `$${Number(backendOrder.total_price || 0).toFixed(2)}`,
-        subtotal: `$${subtotal.toFixed(2)}`,
-        shipping: `$${shipping.toFixed(2)}`,
-        tax: `$${tax.toFixed(2)}`,
+        total: `$${Number(backendOrder.total_price || totals.total).toFixed(2)}`,
+        total_price: backendOrder.total_price,
+        subtotal: `$${totals.subtotal.toFixed(2)}`,
+        shipping: `$${totals.shipping.toFixed(2)}`,
+        tax: `$${totals.tax.toFixed(2)}`,
         date: orderDate,
+        created_at: new Date().toISOString(),
         address: addressFields,
-        buyerName: profile?.username || localStorage.getItem("username") || "Buyer",
-        buyerPhone: profile?.phone || "",
-        buyerEmail: profile?.email || "",
-        items: cart.map((item) => ({
+        customerName: customerFields.name.trim(),
+        customerPhone: customerFields.phone.trim(),
+        customerEmail: customerFields.email.trim(),
+        items: availableItems.map((item) => ({
           id: item.id,
           name: item.name,
           price: item.price,
@@ -168,250 +291,398 @@ function CartPage({ cart = [], onUpdateQuantity, onRemoveItem, onClearCart }) {
       };
 
       try {
-        const existingOrdersRaw = localStorage.getItem("cartOrders");
-        const existingOrders = existingOrdersRaw ? JSON.parse(existingOrdersRaw) : [];
-        localStorage.setItem("cartOrders", JSON.stringify([newOrder, ...existingOrders]));
+        if (!getAccessToken()) {
+          const existingOrdersRaw = localStorage.getItem("cartOrders");
+          const existingOrders = existingOrdersRaw ? JSON.parse(existingOrdersRaw) : [];
+          localStorage.setItem("cartOrders", JSON.stringify([newOrder, ...existingOrders]));
+        }
       } catch (err) {
         console.error("Failed to store local order", err);
       }
 
       setNewOrderId(generatedOrderId);
+      setCompletedTotal(totals.total);
       setOrderSuccess(true);
       onClearCart();
     } catch (err) {
       console.error("Checkout error:", err);
-      alert("Failed to process checkout. Please try again.");
+      window.alert("Failed to process checkout. Please try again.");
     } finally {
       setPlacingOrder(false);
     }
   };
 
-  return (
-    <div className="cart-page">
-      <section className="card">
-        <div className="section-heading">
+  const openProduct = (item) => {
+    navigate(`/product/${item.id}`, { state: { product: item } });
+  };
+
+  const handleRemoveUnavailable = () => {
+    unavailableItems.forEach((item) => onRemoveItem(item.id));
+  };
+
+  if (loading) {
+    return (
+      <div className="ct-page">
+        <div className="ct-hero">
           <div>
-            <p className="eyebrow">Cart</p>
-            <h2>Your shopping cart</h2>
+            <p className="ct-hero__eyebrow">Cart</p>
+            <h1>Your shopping cart</h1>
+            <p>Loading live prices and availability...</p>
           </div>
-          <button type="button" className="btn btn-secondary" onClick={onClearCart} disabled={cart.length === 0}>
-            Clear Cart
+        </div>
+        <div className="ct-loading">
+          <CartSkeleton />
+          <CartSkeleton />
+        </div>
+      </div>
+    );
+  }
+
+  if (!cart.length) {
+    return (
+      <div className="ct-page">
+        <div className="ct-empty">
+          <div className="ct-empty__icon" aria-hidden="true">
+            🛒
+          </div>
+          <h2>Your cart is empty</h2>
+          <p>Add products from the marketplace — your cart stays saved on this device with live pricing at checkout.</p>
+          <button type="button" className="btn btn-primary" onClick={() => navigate("/marketplace")}>
+            Browse marketplace
           </button>
         </div>
+      </div>
+    );
+  }
 
-        {cart.length === 0 ? (
-          <div className="empty-state">No items in your cart yet.</div>
-        ) : (
-          <div className="cart-table">
-            {cart.map((item) => (
-              <div className="cart-table-row" key={item.id}>
-                <div className="cart-table-product">
-                  <img
-                    src={(() => {
-                      const src = (item.images && item.images[0] && item.images[0].image) || item.image_url;
-                      if (!src) return `https://placehold.co/160x160/fdf2e8/f57224?text=${encodeURIComponent(item.name.slice(0, 6))}`;
-                      return src.startsWith("/") ? `http://127.0.0.1:8000${src}` : src;
-                    })()}
-                    alt={item.name}
-                  />
-                  <div>
-                    <strong>{item.name}</strong>
-                    <p className="subtext">{item.store_name || "Marketplace Store"}</p>
+  return (
+    <div className="ct-page">
+      <div className="ct-hero">
+        <div>
+          <p className="ct-hero__eyebrow">Cart</p>
+          <h1>Your shopping cart</h1>
+          <p>Live catalog pricing and stock — checkout as a guest, no account needed.</p>
+        </div>
+
+        <div className="ct-hero__actions">
+          <div className="ct-hero__stats">
+            <div className="ct-stat">
+              <span>Products</span>
+              <strong>{totals.items}</strong>
+            </div>
+            <div className="ct-stat">
+              <span>Units</span>
+              <strong>{totals.units}</strong>
+            </div>
+            <div className="ct-stat">
+              <span>Subtotal</span>
+              <strong>${totals.subtotal.toFixed(2)}</strong>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="btn btn-secondary ct-clear-btn"
+            onClick={onClearCart}
+            disabled={!cart.length}
+          >
+            Clear cart
+          </button>
+        </div>
+      </div>
+
+      {error && (
+        <div className="ct-error" role="alert">
+          {error} Showing your last saved cart until the API is available again.
+        </div>
+      )}
+
+      {(hasPriceChanges || hasQtyAdjustments) && (
+        <div className="ct-alert">
+          <span>
+            {hasPriceChanges && "Prices updated from the live catalog. "}
+            {hasQtyAdjustments && "Some quantities were adjusted to match available stock."}
+          </span>
+        </div>
+      )}
+
+      <div className="ct-layout">
+        <div className="ct-main">
+          {unavailableItems.length > 0 && (
+            <div className="ct-alert ct-alert--warn">
+              <span>
+                {unavailableItems.length} item{unavailableItems.length === 1 ? "" : "s"} unavailable or out of stock.
+              </span>
+              <button type="button" onClick={handleRemoveUnavailable}>
+                Remove unavailable
+              </button>
+            </div>
+          )}
+
+          <div className="ct-list">
+            {liveCart.map((item) => {
+              const meta = getProductMeta(item);
+              const outOfStock = item._unavailable || meta.stock <= 0;
+              const maxQty = Number.isFinite(Number(item.stock)) ? Number(item.stock) : item.quantity;
+              const lineTotal = Number(item.price || 0) * item.quantity;
+
+              return (
+                <article className={`ct-item${outOfStock ? " ct-item--muted" : ""}`} key={item.id}>
+                  <button
+                    type="button"
+                    className="ct-item__media"
+                    onClick={() => openProduct(item)}
+                    aria-label={`View ${item.name}`}
+                  >
+                    <img src={resolveProductImage(item)} alt={item.name} loading="lazy" />
+                    <span
+                      className={`ct-item__badge${meta.stockTone === "low" ? " ct-item__badge--low" : ""}${meta.stockTone === "out" ? " ct-item__badge--out" : ""}`}
+                    >
+                      {item._unavailable ? "Unavailable" : meta.stockLabel}
+                    </span>
+                  </button>
+
+                  <div className="ct-item__body">
+                    <span className="ct-item__store">{meta.store}</span>
+                    <button type="button" className="ct-item__title" onClick={() => openProduct(item)}>
+                      {item.name}
+                    </button>
+                    <div className="ct-item__meta">
+                      <span className="ct-item__unit">${Number(item.price || 0).toFixed(2)} each</span>
+                      {item._priceChanged && (
+                        <span className="ct-item__flag">Price updated</span>
+                      )}
+                      {item._qtyAdjusted && (
+                        <span className="ct-item__flag">Qty adjusted</span>
+                      )}
+                      {item._stale && <span className="ct-item__flag">Offline snapshot</span>}
+                    </div>
+                    <p className="ct-item__line-total">${lineTotal.toFixed(2)}</p>
                   </div>
-                </div>
 
-                <strong>${Number(item.price || 0).toFixed(2)}</strong>
+                  <div className="ct-item__aside">
+                    <div className="ct-qty">
+                      <button
+                        type="button"
+                        disabled={outOfStock || item.quantity <= 1}
+                        onClick={() => onUpdateQuantity(item.id, item.quantity - 1)}
+                        aria-label="Decrease quantity"
+                      >
+                        −
+                      </button>
+                      <span>{item.quantity}</span>
+                      <button
+                        type="button"
+                        disabled={outOfStock || item.quantity >= maxQty}
+                        onClick={() => onUpdateQuantity(item.id, item.quantity + 1)}
+                        aria-label="Increase quantity"
+                      >
+                        +
+                      </button>
+                    </div>
 
-                <div className="quantity-control">
-                  <button type="button" className="btn btn-ghost" onClick={() => onUpdateQuantity(item.id, item.quantity - 1)} disabled={item.quantity <= 1}>
-                    -
-                  </button>
-                  <span>{item.quantity}</span>
-                  <button type="button" className="btn btn-ghost" onClick={() => {
-                    if (item.quantity < (item.stock ?? Infinity)) {
-                      onUpdateQuantity(item.id, item.quantity + 1);
-                    }
-                  }} disabled={item.quantity >= (item.stock ?? Infinity)}>
-                    +
-                  </button>
-                </div>
-
-                <strong>${(Number(item.price || 0) * item.quantity).toFixed(2)}</strong>
-
-                <button type="button" className="btn btn-danger" onClick={() => onRemoveItem(item.id)}>
-                  Remove
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
-
-      <aside className="cart-summary-panel card">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Summary</p>
-            <h3>Order totals</h3>
+                    <button
+                      type="button"
+                      className="ct-item__remove"
+                      onClick={() => onRemoveItem(item.id)}
+                    >
+                      Remove
+                    </button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         </div>
 
-        <div className="summary-box">
-          <div>
-            <span>Subtotal</span>
-            <strong>${subtotal.toFixed(2)}</strong>
+        <aside className="ct-sidebar">
+          <h3>Order summary</h3>
+          <div className="ct-summary-row">
+            <span>Subtotal ({totals.units} units)</span>
+            <strong>${totals.subtotal.toFixed(2)}</strong>
           </div>
-          <div>
+          <div className="ct-summary-row">
             <span>Shipping</span>
-            <strong>${shipping.toFixed(2)}</strong>
+            <strong>${totals.shipping.toFixed(2)}</strong>
           </div>
-          <div>
-            <span>Tax</span>
-            <strong>${tax.toFixed(2)}</strong>
+          <div className="ct-summary-row">
+            <span>Estimated tax</span>
+            <strong>${totals.tax.toFixed(2)}</strong>
           </div>
-          <div className="summary-total">
-            <span>Grand Total</span>
-            <strong>${total.toFixed(2)}</strong>
+          <div className="ct-summary-row ct-summary-row--total">
+            <span>Total</span>
+            <strong>${totals.total.toFixed(2)}</strong>
           </div>
-        </div>
 
-        {!localStorage.getItem("accessToken") && cart.length > 0 ? (
-          <div className="checkout-login-prompt">
-            <p>Please sign in to complete checkout.</p>
-            <button
-              type="button"
-              className="btn btn-secondary"
-              onClick={() => navigate("/login")}
-            >
-              Sign In
-            </button>
-          </div>
-        ) : (
           <button
             type="button"
             className="btn btn-primary"
-            disabled={cart.length === 0}
-            onClick={handleOpenCheckout}
+            disabled={!availableItems.length}
+            onClick={() => {
+              if (!handleOpenCheckout()) {
+                window.alert("Add in-stock items to your cart before checkout.");
+              }
+            }}
           >
-            Checkout
+            Proceed to checkout
           </button>
-        )}
-      </aside>
+          <button type="button" className="btn btn-secondary" onClick={() => navigate("/marketplace")}>
+            Continue shopping
+          </button>
+          <p className="ct-sidebar__note">
+            Cash on delivery available. Totals use live product prices from the marketplace catalog.
+          </p>
+        </aside>
+      </div>
 
       {showModal && (
-        <div className="modal-overlay">
-          <div className="checkout-modal card fade-in">
-            <button className="modal-close" onClick={() => setShowModal(false)}>&times;</button>
+        <div className="ct-modal-overlay">
+          <div className="ct-checkout-modal">
+            <button type="button" className="ct-modal-close" onClick={() => setShowModal(false)} aria-label="Close">
+              ×
+            </button>
 
             {orderSuccess ? (
-              <div className="order-success-state">
-                <div className="success-icon">✓</div>
-                <h3>Order Placed Successfully!</h3>
-                <p className="subtext">Your order <strong>{newOrderId}</strong> has been received.</p>
-                <div className="success-summary">
-                  <p><strong>Payment Method:</strong> Cash on Delivery (COD)</p>
-                  <p><strong>Deliver To:</strong> {addressFields.address1}, {addressFields.postal_code}</p>
-                  <p><strong>Total Paid:</strong> ${total.toFixed(2)}</p>
+              <div className="ct-success">
+                <div className="ct-success__icon">✓</div>
+                <h3>Order placed successfully</h3>
+                <p className="ct-success__text">
+                  Your order <strong>#{newOrderId}</strong> has been received.
+                </p>
+                <div className="ct-success__box">
+                  <p><span>Payment</span><strong>Cash on Delivery</strong></p>
+                  <p><span>Deliver to</span><strong>{addressFields.address1}, {addressFields.postal_code}</strong></p>
+                  <p><span>Total</span><strong>${completedTotal.toFixed(2)}</strong></p>
                 </div>
-                <button className="btn btn-primary" onClick={() => setShowModal(false)}>Continue Shopping</button>
+                <button className="btn btn-primary" type="button" onClick={() => navigate("/orders")}>
+                  View orders
+                </button>
               </div>
             ) : (
-              <form onSubmit={handleConfirmOrder} className="checkout-form">
-                <div className="modal-header">
-                  <p className="eyebrow">Checkout</p>
-                  <h2>Review & Confirm Order</h2>
+              <form onSubmit={handleConfirmOrder} className="ct-checkout-form">
+                <div className="ct-checkout-head">
+                  <p className="ct-hero__eyebrow">Checkout</p>
+                  <h2>Review & confirm</h2>
+                  <p>No account required — enter delivery details to complete your order.</p>
                 </div>
 
-                <div className="modal-body-grid">
-                  <div className="shipping-section">
-                    <h4>Delivery Address</h4>
-                    {loadingProfile ? (
-                      <p className="subtext">Loading delivery address...</p>
-                    ) : (
-                      <div className="address-inputs">
-                        <label className="field-label">Address Line 1</label>
-                        <input
-                          className="field-input"
-                          type="text"
-                          value={addressFields.address1}
-                          placeholder="House/Apartment number, building name"
-                          onChange={(e) => setAddressFields(prev => ({ ...prev, address1: e.target.value }))}
-                          required
-                        />
+                <div className="ct-checkout-grid">
+                  <div className="ct-checkout-section">
+                    <h4>Contact details</h4>
+                    <div className="ct-fields">
+                      <label className="field-label">Full name</label>
+                      <input
+                        className="field-input"
+                        type="text"
+                        value={customerFields.name}
+                        placeholder="Who should we deliver to?"
+                        onChange={(e) => setCustomerFields((prev) => ({ ...prev, name: e.target.value }))}
+                        required
+                      />
 
-                        <label className="field-label">Address Line 2</label>
-                        <input
-                          className="field-input"
-                          type="text"
-                          value={addressFields.address2}
-                          placeholder="Street, area, colony name"
-                          onChange={(e) => setAddressFields(prev => ({ ...prev, address2: e.target.value }))}
-                        />
+                      <label className="field-label">Phone number</label>
+                      <input
+                        className="field-input"
+                        type="text"
+                        value={customerFields.phone}
+                        placeholder="e.g. 03001234567"
+                        onChange={(e) => setCustomerFields((prev) => ({ ...prev, phone: e.target.value }))}
+                      />
 
-                        <label className="field-label">Address Line 3</label>
-                        <input
-                          className="field-input"
-                          type="text"
-                          value={addressFields.address3}
-                          placeholder="Landmark, city, state"
-                          onChange={(e) => setAddressFields(prev => ({ ...prev, address3: e.target.value }))}
-                        />
+                      <label className="field-label">Email (optional)</label>
+                      <input
+                        className="field-input"
+                        type="email"
+                        value={customerFields.email}
+                        placeholder="For order updates"
+                        onChange={(e) => setCustomerFields((prev) => ({ ...prev, email: e.target.value }))}
+                      />
+                    </div>
 
-                        <label className="field-label">Postal / Zip Code</label>
-                        <input
-                          className="field-input"
-                          type="text"
-                          value={addressFields.postal_code}
-                          placeholder="e.g. 10001"
-                          onChange={(e) => setAddressFields(prev => ({ ...prev, postal_code: e.target.value }))}
-                          required
-                        />
+                    <h4>Delivery address</h4>
+                    <div className="ct-fields">
+                      <label className="field-label">Address line 1</label>
+                      <input
+                        className="field-input"
+                        type="text"
+                        value={addressFields.address1}
+                        placeholder="House / apartment, building name"
+                        onChange={(e) => setAddressFields((prev) => ({ ...prev, address1: e.target.value }))}
+                        required
+                      />
 
-                        <label className="field-label">Delivery Instructions / Detail</label>
-                        <textarea
-                          className="field-input"
-                          value={addressFields.detail}
-                          placeholder="Additional landmarks or special delivery instructions"
-                          rows="2"
-                          onChange={(e) => setAddressFields(prev => ({ ...prev, detail: e.target.value }))}
-                        />
-                      </div>
-                    )}
+                      <label className="field-label">Address line 2</label>
+                      <input
+                        className="field-input"
+                        type="text"
+                        value={addressFields.address2}
+                        placeholder="Street, area, colony"
+                        onChange={(e) => setAddressFields((prev) => ({ ...prev, address2: e.target.value }))}
+                      />
+
+                      <label className="field-label">Address line 3</label>
+                      <input
+                        className="field-input"
+                        type="text"
+                        value={addressFields.address3}
+                        placeholder="Landmark, city, state"
+                        onChange={(e) => setAddressFields((prev) => ({ ...prev, address3: e.target.value }))}
+                      />
+
+                      <label className="field-label">Postal / zip code</label>
+                      <input
+                        className="field-input"
+                        type="text"
+                        value={addressFields.postal_code}
+                        placeholder="e.g. 10001"
+                        onChange={(e) => setAddressFields((prev) => ({ ...prev, postal_code: e.target.value }))}
+                        required
+                      />
+
+                      <label className="field-label">Delivery instructions</label>
+                      <textarea
+                        className="field-input"
+                        value={addressFields.detail}
+                        placeholder="Landmarks or special instructions"
+                        rows="2"
+                        onChange={(e) => setAddressFields((prev) => ({ ...prev, detail: e.target.value }))}
+                      />
+                    </div>
                   </div>
 
-                  <div className="summary-payment-section">
-                    <div className="checkout-summary-box">
-                      <h4>Order Totals</h4>
-                      <div className="summary-row">
-                        <span>Items Subtotal</span>
-                        <strong>${subtotal.toFixed(2)}</strong>
+                  <div className="ct-checkout-aside">
+                    <div className="ct-checkout-summary">
+                      <h4>Order totals</h4>
+                      <div className="ct-summary-row">
+                        <span>Items subtotal</span>
+                        <strong>${totals.subtotal.toFixed(2)}</strong>
                       </div>
-                      <div className="summary-row">
-                        <span>Delivery / Shipping</span>
-                        <strong>${shipping.toFixed(2)}</strong>
+                      <div className="ct-summary-row">
+                        <span>Delivery</span>
+                        <strong>${totals.shipping.toFixed(2)}</strong>
                       </div>
-                      <div className="summary-row">
-                        <span>Estimated Tax</span>
-                        <strong>${tax.toFixed(2)}</strong>
+                      <div className="ct-summary-row">
+                        <span>Estimated tax</span>
+                        <strong>${totals.tax.toFixed(2)}</strong>
                       </div>
-                      <div className="summary-row grand-total">
-                        <span>Grand Total</span>
-                        <strong>${total.toFixed(2)}</strong>
-                      </div>
-                    </div>
-
-                    <div className="payment-method-box">
-                      <h4>Payment Method</h4>
-                      <div className="cod-badge">
-                        <input type="radio" checked readOnly id="cod" />
-                        <label htmlFor="cod">
-                          <strong>Cash on Delivery (COD)</strong>
-                          <p className="subtext" style={{ margin: 0, fontSize: "0.85rem" }}>Pay with cash upon package delivery.</p>
-                        </label>
+                      <div className="ct-summary-row ct-summary-row--total">
+                        <span>Grand total</span>
+                        <strong>${totals.total.toFixed(2)}</strong>
                       </div>
                     </div>
 
-                    <button className="btn btn-primary place-order-btn" type="submit" disabled={placingOrder}>
-                      {placingOrder ? "Placing Order..." : "Confirm & Place Order"}
+                    <div className="ct-cod">
+                      <h4>Payment method</h4>
+                      <label className="ct-cod__option">
+                        <input type="radio" checked readOnly />
+                        <span>
+                          <strong>Cash on delivery</strong>
+                          <small>Pay when your package arrives.</small>
+                        </span>
+                      </label>
+                    </div>
+
+                    <button className="btn btn-primary ct-place-order" type="submit" disabled={placingOrder}>
+                      {placingOrder ? "Placing order..." : "Confirm & place order"}
                     </button>
                   </div>
                 </div>

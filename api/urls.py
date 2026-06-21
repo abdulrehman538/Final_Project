@@ -4,8 +4,9 @@ from .views import (ProductListCreateView, ProductDetailView,
                      ProductCommentListCreateView, ProductImageDetailView,
                      CheckUsernameView, CheckoutView, OrderListView, SellerOrdersView,
                      SellerProductsView, SellerRequestListView, ApproveSellerRequestView,
-                     RejectSellerRequestView, AdminOrdersView, OrderStatusUpdateView,
-                     OrderDeliveryConfirmationView, ProductSearchView)
+                     RejectSellerRequestView, AdminOrdersView, AdminDashboardStatsView,
+                     AdminStoresListView, OrderStatusUpdateView,
+                     OrderDeliveryConfirmationView, ProductSearchView, CartView)
 
 urlpatterns = [
     path('products/', ProductListCreateView.as_view()),
@@ -17,6 +18,7 @@ urlpatterns = [
     path('check-username/', CheckUsernameView.as_view()),
     path('user-role/', UserRoleView.as_view()),
     path('profile/', ProfileView.as_view()),
+    path('cart/', CartView.as_view()),
     path('checkout/', CheckoutView.as_view()),
     path('orders/', OrderListView.as_view()),
     path('orders/<int:pk>/status/', OrderStatusUpdateView.as_view()),
@@ -27,4 +29,6 @@ urlpatterns = [
     path('admin/seller-requests/approve/', ApproveSellerRequestView.as_view()),
     path('admin/seller-requests/reject/', RejectSellerRequestView.as_view()),
     path('admin/orders/', AdminOrdersView.as_view()),
+    path('admin/stats/', AdminDashboardStatsView.as_view()),
+    path('admin/stores/', AdminStoresListView.as_view()),
 ]

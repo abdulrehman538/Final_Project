@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { getPostLoginPath, normalizeRole } from "../utils/roles";
+import { saveAuthTokens } from "../utils/authSession";
 import "./AuthPage.css";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
 
-function AuthPage({ onLogin }) {
+function AuthPage({ onLogin, portalOnly = false }) {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
@@ -21,10 +23,12 @@ function AuthPage({ onLogin }) {
     address2: "",
     address3: "",
     postalCode: "",
+    storeName: "",
+    businessDescription: "",
+    termsAccepted: false,
   });
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
-  // "idle" | "checking" | "available" | "taken"
   const [usernameStatus, setUsernameStatus] = useState("idle");
   const usernameDebounceRef = useRef(null);
 
@@ -33,6 +37,13 @@ function AuthPage({ onLogin }) {
     setMode(location.pathname === "/register" || forceSignup ? "signup" : "signin");
     setSignupStage(1);
   }, [location.pathname, searchParams]);
+
+  useEffect(() => {
+    if (location.state?.sessionExpired) {
+      setError("Your session has expired. Please sign in again.");
+      navigate(location.pathname + location.search, { replace: true, state: {} });
+    }
+  }, [location, navigate]);
 
   // Debounced username availability check
   useEffect(() => {
@@ -64,7 +75,7 @@ function AuthPage({ onLogin }) {
     setSignupStage(1);
     // Preserve any existing redirect query parameter
     const existingRedirect = searchParams.get("redirect");
-    const basePath = nextMode === "signin" ? "/login" : "/register";
+    const basePath = "/portal";
     const url = existingRedirect ? `${basePath}?redirect=${encodeURIComponent(existingRedirect)}` : basePath;
     navigate(url, { replace: true });
   };
@@ -95,24 +106,20 @@ function AuthPage({ onLogin }) {
       });
 
       const roleData = await roleResponse.json().catch(() => ({}));
-      const role = (roleData.role || "user").toString().toLowerCase();
+      const role = normalizeRole(roleData.role);
+      const sellerStatus = roleData.seller_status || "none";
 
-      localStorage.setItem("accessToken", data.access);
+      saveAuthTokens({ access: data.access, refresh: data.refresh });
       localStorage.setItem("userRole", role);
+      localStorage.setItem("sellerStatus", sellerStatus);
       localStorage.setItem("username", signin.username);
 
-      onLogin(data.access, role, signin.username);
+      onLogin(data.access, role, signin.username, sellerStatus);
       const redirectAfterLogin = searchParams.get("redirect");
       if (redirectAfterLogin) {
         navigate(redirectAfterLogin);
       } else {
-        navigate(
-          role === "admin"
-            ? "/dashboard"
-            : role === "seller"
-            ? "/products"
-            : "/marketplace"
-        );
+        navigate(getPostLoginPath(role));
       }
     } catch (error) {
       console.error("Login failed", error);
@@ -179,6 +186,21 @@ function AuthPage({ onLogin }) {
       return;
     }
 
+    if (portalOnly) {
+      if (!signup.storeName.trim()) {
+        setError("Store name is required.");
+        return;
+      }
+      if (!signup.businessDescription.trim()) {
+        setError("Business description is required.");
+        return;
+      }
+      if (!signup.termsAccepted) {
+        setError("You must accept the seller terms.");
+        return;
+      }
+    }
+
     const addressJson = JSON.stringify({
       address1: signup.address1,
       address2: signup.address2,
@@ -186,20 +208,34 @@ function AuthPage({ onLogin }) {
       postal_code: signup.postalCode,
     });
 
+    const registerPayload = {
+      username: signup.username,
+      password: signup.password,
+      email: signup.email,
+      phone: signup.phone,
+      address: addressJson,
+    };
+
+    if (portalOnly) {
+      registerPayload.apply_as_seller = true;
+      registerPayload.store_name = signup.storeName.trim();
+      registerPayload.business_description = signup.businessDescription.trim();
+      registerPayload.contact_phone = signup.phone.trim();
+      registerPayload.terms_accepted = signup.termsAccepted;
+    }
+
     const response = await fetch("http://127.0.0.1:8000/api/register/", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        username: signup.username,
-        password: signup.password,
-        email: signup.email,
-        phone: signup.phone,
-        address: addressJson,
-      }),
+      body: JSON.stringify(registerPayload),
     });
 
     if (response.ok) {
-      setMessage("Account created successfully! Please sign in.");
+      setMessage(
+        portalOnly
+          ? "Seller account created! Your application is pending admin approval. Please sign in."
+          : "Account created successfully! Please sign in."
+      );
       setMode("signin");
       setSignupStage(1);
       // After successful registration, redirect to original page if provided
@@ -220,6 +256,9 @@ function AuthPage({ onLogin }) {
         address2: "",
         address3: "",
         postalCode: "",
+        storeName: "",
+        businessDescription: "",
+        termsAccepted: false,
       });
     } else {
       const data = await response.json().catch(() => ({}));
@@ -244,10 +283,11 @@ function AuthPage({ onLogin }) {
             </div>
           </div>
 
-          <h1>Everything you need to shop and sell online.</h1>
+          <h1>{portalOnly ? "Seller & admin access" : "Everything you need to shop and sell online."}</h1>
           <p>
-            Browse curated products, save favorites, manage your profile, and check out through a clean
-            marketplace experience designed for buyers and sellers.
+            {portalOnly
+              ? "Sign in to manage your store or admin dashboard. Shoppers can browse and checkout without an account."
+              : "Browse curated products, save favorites, manage your profile, and check out through a clean marketplace experience designed for shoppers and sellers."}
           </p>
 
           <div className="auth-stats">
@@ -281,7 +321,7 @@ function AuthPage({ onLogin }) {
             className={`auth-tab${mode === "signup" ? " is-active" : ""}`}
             onClick={() => switchMode("signup")}
           >
-            Sign Up
+            Create Seller Account
           </button>
         </div>
 
@@ -307,7 +347,7 @@ function AuthPage({ onLogin }) {
                   </div>
                   <div className={`signup-step ${signupStage === 2 ? "is-active" : ""}`}>
                     <span className="step-num">2</span>
-                    <span className="step-label">Address Details</span>
+                    <span className="step-label">{portalOnly ? "Store details" : "Address Details"}</span>
                   </div>
                 </div>
 
@@ -390,6 +430,32 @@ function AuthPage({ onLogin }) {
                   </div>
                 ) : (
                   <div className="form-stage-content fade-in">
+                    {portalOnly && (
+                      <>
+                        <label className="field-label" htmlFor="seller-store-name">Store name</label>
+                        <input
+                          id="seller-store-name"
+                          className="field-input field-input--small"
+                          type="text"
+                          placeholder="Your store or brand name"
+                          value={signup.storeName}
+                          onChange={(e) => setSignup((current) => ({ ...current, storeName: e.target.value }))}
+                          required
+                        />
+
+                        <label className="field-label" htmlFor="seller-business-description">Business description</label>
+                        <textarea
+                          id="seller-business-description"
+                          className="field-input field-input--small"
+                          placeholder="What do you sell? Tell customers about your business."
+                          rows={3}
+                          value={signup.businessDescription}
+                          onChange={(e) => setSignup((current) => ({ ...current, businessDescription: e.target.value }))}
+                          required
+                        />
+                      </>
+                    )}
+
                     <label className="field-label">Address Line 1</label>
                     <input
                       className="field-input field-input--small"
@@ -427,6 +493,17 @@ function AuthPage({ onLogin }) {
                       onChange={(e) => setSignup((current) => ({ ...current, postalCode: e.target.value }))}
                       required
                     />
+
+                    {portalOnly && (
+                      <label className="seller-checkbox" style={{ marginTop: "12px" }}>
+                        <input
+                          type="checkbox"
+                          checked={signup.termsAccepted}
+                          onChange={(e) => setSignup((current) => ({ ...current, termsAccepted: e.target.checked }))}
+                        />
+                        <span>I agree to the seller terms and will provide accurate product information.</span>
+                      </label>
+                    )}
 
                   </div>
                 )}
@@ -471,14 +548,18 @@ function AuthPage({ onLogin }) {
                 type="submit"
                 style={{ flex: "2", padding: "10px", minHeight: "40px", fontSize: "0.9rem" }}
               >
-                {mode === "signin" ? "Continue" : signupStage === 1 ? "Next: Address Details" : "Create Account"}
+                {mode === "signin" ? "Continue" : signupStage === 1 ? (portalOnly ? "Next: Store details" : "Next: Address Details") : (portalOnly ? "Submit seller application" : "Create Account")}
               </button>
             </div>
 
-            <p className="auth-switch" style={{ marginTop: "16px", justifyContent: "center" }}>
-              {mode === "signin" ? "Need an account?" : "Already have an account?"}
+            <p className="auth-switch" style={{ marginTop: "16px", justifyContent: "center", flexWrap: "wrap", gap: "8px" }}>
+              {mode === "signin" ? "New seller?" : "Already registered?"}
               <button type="button" onClick={() => switchMode(mode === "signin" ? "signup" : "signin")}>
-                {mode === "signin" ? "Sign Up" : "Sign In"}
+                {mode === "signin" ? "Create seller account" : "Sign in"}
+              </button>
+              <span>·</span>
+              <button type="button" onClick={() => navigate("/marketplace")}>
+                Continue shopping
               </button>
             </p>
           </form>

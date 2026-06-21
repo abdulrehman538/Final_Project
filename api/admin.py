@@ -108,12 +108,15 @@ class OrderAdmin(admin.ModelAdmin):
     list_display = (
         "id",
         "buyer",
+        "customer_name",
         "status",
         "total_price",
         "created_at",
     )
     search_fields = (
         "buyer__username",
+        "customer_name",
+        "customer_email",
     )
     list_filter = (
         "status",

@@ -1,236 +1,629 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { fetchWithAuth, getAccessToken } from "../utils/authSession";
 import "./AdminDashboard.css";
 
+const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
+
+const emptyStats = {
+  users_count: 0,
+  active_sellers: 0,
+  pending_applications: 0,
+  products_count: 0,
+  orders_count: 0,
+  revenue_total: "0",
+  low_stock_count: 0,
+  out_of_stock_count: 0,
+  order_volume: [],
+  order_volume_max: 1,
+  low_stock_products: [],
+};
+
+function formatDate(value) {
+  if (!value) return "—";
+  return new Date(value).toLocaleDateString(undefined, {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function parseAddress(raw) {
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (typeof parsed === "object" && parsed !== null) {
+      return [
+        parsed.detail,
+        parsed.address1,
+        parsed.address2,
+        parsed.address3,
+        parsed.postal_code,
+      ].filter(Boolean);
+    }
+  } catch {
+    return [raw];
+  }
+  return [];
+}
+
+function getStatusBadgeClass(status) {
+  const normalized = (status || "pending").toLowerCase();
+  if (["delivered", "completed"].includes(normalized)) return "ad-status ad-status--success";
+  if (["confirmed", "shipped"].includes(normalized)) return "ad-status ad-status--warning";
+  if (normalized === "cancelled") return "ad-status ad-status--muted";
+  return "ad-status ad-status--danger";
+}
+
+function ApplicationDetailModal({ application, onClose, onApprove, onReject, acting }) {
+  const addressLines = parseAddress(application.address);
+
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
+  return (
+    <div className="ad-modal-overlay" onClick={onClose} role="presentation">
+      <div
+        className="ad-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="ad-app-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <header className="ad-modal__head">
+          <div>
+            <p className="ad-modal__eyebrow">Seller application</p>
+            <h2 id="ad-app-title">{application.store_name || "Store application"}</h2>
+            <p className="ad-modal__meta">Submitted {formatDate(application.updated_at)}</p>
+          </div>
+          <button type="button" className="ad-modal__close" onClick={onClose} aria-label="Close">
+            ×
+          </button>
+        </header>
+
+        <div className="ad-modal__body">
+          <section className="ad-detail-section">
+            <h3>Account</h3>
+            <dl className="ad-detail-grid">
+              <div><dt>Username</dt><dd>{application.username}</dd></div>
+              <div><dt>Email</dt><dd>{application.email || "—"}</dd></div>
+              <div><dt>Full name</dt><dd>{application.full_name || "—"}</dd></div>
+              <div><dt>Phone</dt><dd>{application.phone || "—"}</dd></div>
+              <div><dt>Joined</dt><dd>{formatDate(application.date_joined)}</dd></div>
+              <div><dt>Status</dt><dd className="ad-status ad-status--warning">Pending review</dd></div>
+            </dl>
+          </section>
+
+          <section className="ad-detail-section">
+            <h3>Store application</h3>
+            <dl className="ad-detail-grid">
+              <div><dt>Store name</dt><dd>{application.store_name || "—"}</dd></div>
+              <div><dt>Contact phone</dt><dd>{application.contact_phone || "—"}</dd></div>
+              <div className="ad-detail-grid__full">
+                <dt>Business description</dt>
+                <dd>{application.business_description || "—"}</dd>
+              </div>
+              <div><dt>Terms accepted</dt><dd>{application.terms_accepted ? "Yes" : "No"}</dd></div>
+            </dl>
+          </section>
+
+          {addressLines.length > 0 && (
+            <section className="ad-detail-section">
+              <h3>Profile address</h3>
+              <address className="ad-address">
+                {addressLines.map((line) => (
+                  <span key={line}>{line}</span>
+                ))}
+              </address>
+            </section>
+          )}
+
+          {application.bio && (
+            <section className="ad-detail-section">
+              <h3>Bio</h3>
+              <p className="ad-detail-text">{application.bio}</p>
+            </section>
+          )}
+        </div>
+
+        <footer className="ad-modal__foot">
+          <button
+            type="button"
+            className="ad-btn ad-btn--ghost"
+            onClick={onClose}
+            disabled={acting}
+          >
+            Close
+          </button>
+          <div className="ad-modal__foot-actions">
+            <button
+              type="button"
+              className="ad-btn ad-btn--danger"
+              onClick={() => onReject(application.user_id)}
+              disabled={acting}
+            >
+              Reject
+            </button>
+            <button
+              type="button"
+              className="ad-btn ad-btn--primary"
+              onClick={() => onApprove(application.user_id)}
+              disabled={acting}
+            >
+              {acting ? "Processing…" : "Approve seller"}
+            </button>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}
+
+function OrderDetailModal({ order, onClose }) {
+  useEffect(() => {
+    const onKeyDown = (e) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.body.style.overflow = "";
+      window.removeEventListener("keydown", onKeyDown);
+    };
+  }, [onClose]);
+
+  const address = parseAddress(order.shipping_address);
+
+  return (
+    <div className="ad-modal-overlay" onClick={onClose} role="presentation">
+      <div className="ad-modal ad-modal--compact" role="dialog" aria-modal="true" onClick={(e) => e.stopPropagation()}>
+        <header className="ad-modal__head">
+          <div>
+            <p className="ad-modal__eyebrow">Order</p>
+            <h2>Order #{order.id}</h2>
+            <p className="ad-modal__meta">{formatDate(order.created_at)}</p>
+          </div>
+          <button type="button" className="ad-modal__close" onClick={onClose} aria-label="Close">×</button>
+        </header>
+        <div className="ad-modal__body">
+          <dl className="ad-detail-grid">
+            <div>
+              <dt>Customer</dt>
+              <dd>{order.display_customer || order.customer_name || order.customer_username || "Guest"}</dd>
+            </div>
+            <div>
+              <dt>Status</dt>
+              <dd><span className={getStatusBadgeClass(order.status)}>{order.status}</span></dd>
+            </div>
+            <div>
+              <dt>Total</dt>
+              <dd>${Number(order.total_price || 0).toFixed(2)}</dd>
+            </div>
+            <div>
+              <dt>Phone</dt>
+              <dd>{order.customer_phone || "—"}</dd>
+            </div>
+            <div>
+              <dt>Email</dt>
+              <dd>{order.customer_email || "—"}</dd>
+            </div>
+            {address.length > 0 && (
+              <div className="ad-detail-grid__full">
+                <dt>Shipping</dt>
+                <dd>
+                  <address className="ad-address">
+                    {address.map((line) => <span key={line}>{line}</span>)}
+                  </address>
+                </dd>
+              </div>
+            )}
+          </dl>
+          {order.items?.length > 0 && (
+            <section className="ad-detail-section">
+              <h3>Items</h3>
+              <ul className="ad-item-list">
+                {order.items.map((item) => (
+                  <li key={item.id}>
+                    <span>{item.product_name} × {item.quantity}</span>
+                    <strong>${(Number(item.price || 0) * item.quantity).toFixed(2)}</strong>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AdminDashboard() {
+  const [stats, setStats] = useState(emptyStats);
   const [sellerRequests, setSellerRequests] = useState([]);
   const [orders, setOrders] = useState([]);
+  const [stores, setStores] = useState([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
+  const [applicationSearch, setApplicationSearch] = useState("");
+  const [storeSearch, setStoreSearch] = useState("");
+  const [selectedApplication, setSelectedApplication] = useState(null);
+  const [selectedOrder, setSelectedOrder] = useState(null);
+  const [actingOnId, setActingOnId] = useState(null);
 
-  const token = localStorage.getItem("accessToken");
+  const loadStores = useCallback(async (query = "") => {
+    const params = query.trim() ? `?q=${encodeURIComponent(query.trim())}` : "";
+    const response = await fetchWithAuth(`${API_BASE}/api/admin/stores${params}`);
+    if (response.ok) {
+      const data = await response.json();
+      setStores(Array.isArray(data) ? data : []);
+    }
+  }, []);
 
-  const loadData = async () => {
-    if (!token) return;
+  const loadData = useCallback(async () => {
+    if (!getAccessToken()) return;
     setLoading(true);
     try {
-      const [requestsRes, ordersRes] = await Promise.all([
-        fetch("http://127.0.0.1:8000/api/admin/seller-requests/", {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
-        fetch("http://127.0.0.1:8000/api/admin/orders/", {
-          headers: { Authorization: `Bearer ${token}` },
-        }),
+      const [statsRes, requestsRes, ordersRes] = await Promise.all([
+        fetchWithAuth(`${API_BASE}/api/admin/stats/`),
+        fetchWithAuth(`${API_BASE}/api/admin/seller-requests/`),
+        fetchWithAuth(`${API_BASE}/api/admin/orders/`),
       ]);
 
+      if (statsRes.ok) {
+        setStats({ ...emptyStats, ...(await statsRes.json()) });
+      }
+
       if (requestsRes.ok) {
-        const requestsData = await requestsRes.json();
-        setSellerRequests(Array.isArray(requestsData) ? requestsData : []);
+        const data = await requestsRes.json();
+        setSellerRequests(Array.isArray(data) ? data : []);
       }
 
       if (ordersRes.ok) {
-        const ordersData = await ordersRes.json();
-        setOrders(Array.isArray(ordersData) ? ordersData : []);
+        const data = await ordersRes.json();
+        setOrders(Array.isArray(data) ? data : []);
       }
     } catch (error) {
       console.error("Failed to load admin dashboard data", error);
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     loadData();
-  }, [token]);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      loadStores(storeSearch);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [storeSearch, loadStores]);
+
+  const filteredApplications = useMemo(() => {
+    const q = applicationSearch.trim().toLowerCase();
+    if (!q) return sellerRequests;
+    return sellerRequests.filter((req) =>
+      [req.username, req.store_name, req.email, req.contact_phone, req.business_description]
+        .some((field) => (field || "").toLowerCase().includes(q))
+    );
+  }, [sellerRequests, applicationSearch]);
 
   const handleApproveRequest = async (userId) => {
-    if (!userId) {
-      setMessage("Unable to approve request: missing user ID.");
-      return;
-    }
-
+    if (!userId) return;
+    setActingOnId(userId);
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/admin/seller-requests/approve/", {
+      const response = await fetchWithAuth(`${API_BASE}/api/admin/seller-requests/approve/`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId }),
       });
-
       const data = await response.json().catch(() => ({}));
-
       if (response.ok) {
         setMessage("Seller request approved.");
+        setSelectedApplication(null);
         await loadData();
+        await loadStores(storeSearch);
       } else {
         setMessage(data.detail || "Failed to approve seller request.");
       }
-    } catch (error) {
-      console.error("Failed to approve seller request", error);
+    } catch {
       setMessage("Failed to approve seller request.");
+    } finally {
+      setActingOnId(null);
     }
   };
 
   const handleRejectRequest = async (userId) => {
-    if (!userId) {
-      setMessage("Unable to reject request: missing user ID.");
-      return;
-    }
-
+    if (!userId) return;
+    setActingOnId(userId);
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/admin/seller-requests/reject/", {
+      const response = await fetchWithAuth(`${API_BASE}/api/admin/seller-requests/reject/`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ user_id: userId }),
       });
-
       const data = await response.json().catch(() => ({}));
-
       if (response.ok) {
         setMessage("Seller request rejected.");
+        setSelectedApplication(null);
         await loadData();
+        await loadStores(storeSearch);
       } else {
         setMessage(data.detail || "Failed to reject seller request.");
       }
-    } catch (error) {
-      console.error("Failed to reject seller request", error);
+    } catch {
       setMessage("Failed to reject seller request.");
+    } finally {
+      setActingOnId(null);
     }
   };
 
-  const getRequestUserId = (request) => request.user_id ?? request.user?.id ?? request.user_id ?? request.id;
-
-  const overviewCards = [
-    { label: "Users", value: "1,842", note: "Active buyers and sellers" },
-    { label: "Sellers", value: String(sellerRequests.length + orders.length), note: "Pending and active seller activity" },
-    { label: "Products", value: "10,280", note: "Live listings across stores" },
-    { label: "Revenue", value: "$76.4K", note: "This quarter" },
-  ];
+  const volumeMax = Number(stats.order_volume_max) || 1;
 
   return (
-    <div className="dashboard-page">
-      {message ? <div className="auth-alert auth-alert-success">{message}</div> : null}
-      <section className="dashboard-grid">
-        {overviewCards.map((card) => (
-          <div className="dashboard-card" key={card.label}>
-            <p className="eyebrow">{card.label}</p>
-            <h3>{card.value}</h3>
-            <span className="subtext">{card.note}</span>
-          </div>
-        ))}
+    <div className="admin-dashboard">
+      <header className="ad-page-head">
+        <div>
+          <p className="ad-page-head__eyebrow">Administration</p>
+          <h1>Dashboard</h1>
+          <p className="ad-page-head__sub">Live marketplace overview — users, stores, orders, and seller applications.</p>
+        </div>
+        <button
+          type="button"
+          className="ad-btn ad-btn--ghost"
+          onClick={async () => {
+            await loadData();
+            await loadStores(storeSearch);
+          }}
+          disabled={loading}
+        >
+          Refresh data
+        </button>
+      </header>
+
+      {message && <div className="auth-alert auth-alert-success">{message}</div>}
+
+      <section className="ad-stats">
+        <article className="ad-stat">
+          <p className="ad-stat__label">Users</p>
+          <p className="ad-stat__value">{stats.users_count}</p>
+          <span className="ad-stat__hint">Registered accounts</span>
+        </article>
+        <article className="ad-stat">
+          <p className="ad-stat__label">Active stores</p>
+          <p className="ad-stat__value">{stats.active_sellers}</p>
+          <span className="ad-stat__hint">{stats.pending_applications} pending application(s)</span>
+        </article>
+        <article className="ad-stat">
+          <p className="ad-stat__label">Products</p>
+          <p className="ad-stat__value">{stats.products_count}</p>
+          <span className="ad-stat__hint">{stats.low_stock_count} low · {stats.out_of_stock_count} out of stock</span>
+        </article>
+        <article className="ad-stat">
+          <p className="ad-stat__label">Revenue</p>
+          <p className="ad-stat__value">${Number(stats.revenue_total || 0).toFixed(0)}</p>
+          <span className="ad-stat__hint">{stats.orders_count} orders total</span>
+        </article>
       </section>
 
-      <section className="dashboard-panels">
-        <article className="stat-card">
-          <div className="panel-header">
+      <section className="ad-panels">
+        <article className="ad-panel">
+          <header className="ad-panel__head">
             <div>
-              <p className="eyebrow">Revenue</p>
-              <h2>Monthly revenue trend</h2>
+              <p className="ad-panel__eyebrow">Sales</p>
+              <h2>Last 7 days</h2>
             </div>
-            <span className="pill">+14%</span>
-          </div>
-
-          <div className="chart-bars">
-            {[42, 58, 34, 72, 64, 88, 70].map((height, index) => (
-              <div className="chart-bar" key={String(index)}>
-                <span style={{ height: `${height}%` }} />
-                <small>W{index + 1}</small>
+          </header>
+          <div className="ad-panel__body">
+            {stats.order_volume.length === 0 ? (
+              <p className="ad-empty">No order data yet.</p>
+            ) : (
+              <div className="ad-chart">
+                {stats.order_volume.map((day) => {
+                  const height = Math.max(8, (day.total / volumeMax) * 100);
+                  return (
+                    <div className="ad-chart__bar" key={day.date}>
+                      <div className="ad-chart__track">
+                        <span style={{ height: `${height}%` }} title={`$${day.total.toFixed(2)}`} />
+                      </div>
+                      <small>{day.label}</small>
+                      <span className="ad-chart__meta">{day.orders} orders</span>
+                    </div>
+                  );
+                })}
               </div>
-            ))}
+            )}
           </div>
         </article>
 
-        <article className="stat-card">
-          <div className="panel-header">
+        <article className="ad-panel">
+          <header className="ad-panel__head">
             <div>
-              <p className="eyebrow">Orders</p>
+              <p className="ad-panel__eyebrow">Orders</p>
               <h2>Recent orders</h2>
             </div>
-            <span className="pill pill-soft">Live</span>
-          </div>
-
-          <div className="table-card">
+            <span className="ad-panel__count">{orders.length}</span>
+          </header>
+          <div className="ad-panel__body ad-panel__body--scroll">
             {loading ? (
-              <div className="empty-state">Loading orders…</div>
+              <p className="ad-empty">Loading orders…</p>
             ) : orders.length === 0 ? (
-              <div className="empty-state">No orders yet.</div>
+              <p className="ad-empty">No orders yet.</p>
             ) : (
-              orders.slice(0, 5).map((order) => (
-                <div className="table-row" key={order.id}>
-                  <div>
-                    <strong>#{order.id}</strong>
-                    <p className="subtext">{order.buyer_username || "Buyer"}</p>
-                  </div>
-                  <span className={`status-badge ${order.status === "delivered" || order.status === "completed" ? "status-badge--success" : order.status === "confirmed" || order.status === "shipped" ? "status-badge--warning" : "status-badge--danger"}`}>
-                    {order.status}
-                  </span>
-                  <strong>${Number(order.total_price || 0).toFixed(2)}</strong>
-                </div>
-              ))
+              <ul className="ad-table">
+                {orders.slice(0, 8).map((order) => (
+                  <li key={order.id}>
+                    <button type="button" className="ad-table__row" onClick={() => setSelectedOrder(order)}>
+                      <span className="ad-table__primary">#{order.id}</span>
+                      <span className="ad-table__muted">
+                        {order.display_customer || order.customer_name || "Guest"}
+                      </span>
+                      <span className={getStatusBadgeClass(order.status)}>{order.status}</span>
+                      <span className="ad-table__amount">${Number(order.total_price || 0).toFixed(2)}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </article>
       </section>
 
-      <section className="dashboard-panels">
-        <article className="stat-card">
-          <div className="panel-header">
+      <section className="ad-panels ad-panels--stores">
+        <article className="ad-panel ad-panel--stores-grid">
+          <header className="ad-panel__head ad-panel__head--split">
             <div>
-              <p className="eyebrow">Stores</p>
-              <h2>Seller applications</h2>
+              <p className="ad-panel__eyebrow">Marketplace</p>
+              <h2>Active stores</h2>
             </div>
+            <div className="ad-panel__head-tools">
+              <input
+                type="search"
+                className="ad-search ad-search--inline"
+                placeholder="Search stores…"
+                value={storeSearch}
+                onChange={(e) => setStoreSearch(e.target.value)}
+                aria-label="Search stores"
+              />
+              <span className="ad-panel__count">{stores.length}</span>
+            </div>
+          </header>
+          <div className="ad-panel__body ad-panel__body--stores">
+            {stores.length === 0 ? (
+              <p className="ad-empty">No active stores match your search.</p>
+            ) : (
+              <div className="ad-store-grid">
+                {stores.map((store) => (
+                  <article className="ad-store-card" key={store.user_id}>
+                    <div className="ad-store-card__media">
+                      {store.featured_image ? (
+                        <img src={store.featured_image} alt="" />
+                      ) : (
+                        <span className="ad-store-card__placeholder">
+                          {(store.store_name || store.username || "S").slice(0, 1).toUpperCase()}
+                        </span>
+                      )}
+                    </div>
+                    <div className="ad-store-card__body">
+                      <h3>{store.store_name || "Unnamed store"}</h3>
+                      <p className="ad-store-card__owner">@{store.username}</p>
+                      <p className="ad-store-card__desc">
+                        {store.business_description || "No store description provided."}
+                      </p>
+                      <div className="ad-store-card__meta">
+                        <span>{store.contact_phone || "No phone"}</span>
+                        <span className="ad-store-card__products">
+                          {store.product_count} product{store.product_count === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </div>
+        </article>
+      </section>
 
-          <div className="table-card">
+      <section className="ad-panels">
+        <article className="ad-panel ad-panel--wide">
+          <header className="ad-panel__head ad-panel__head--split">
+            <div>
+              <p className="ad-panel__eyebrow">Applications</p>
+              <h2>Seller requests</h2>
+            </div>
+            <div className="ad-panel__head-tools">
+              <input
+                type="search"
+                className="ad-search ad-search--inline"
+                placeholder="Search applications…"
+                value={applicationSearch}
+                onChange={(e) => setApplicationSearch(e.target.value)}
+                aria-label="Search applications"
+              />
+              <span className="ad-panel__count">{filteredApplications.length}</span>
+            </div>
+          </header>
+          <div className="ad-panel__body ad-panel__body--scroll">
             {loading ? (
-              <div className="empty-state">Loading seller requests…</div>
-            ) : sellerRequests.length === 0 ? (
-              <div className="empty-state">No pending seller requests.</div>
+              <p className="ad-empty">Loading applications…</p>
+            ) : filteredApplications.length === 0 ? (
+              <p className="ad-empty">No pending seller applications.</p>
             ) : (
-              sellerRequests.map((request) => {
-                const requestUserId = getRequestUserId(request);
-
-                return (
-                  <div className="table-row" key={request.username}>
-                    <div>
-                      <strong>{request.username}</strong>
-                      <p className="subtext">{request.store_name || "Store request"}</p>
-                    </div>
-                    <div style={{ display: "flex", gap: "8px" }}>
-                      <button className="btn btn-primary" onClick={() => handleApproveRequest(requestUserId)}>
-                        Approve
-                      </button>
-                      <button className="btn btn-secondary" onClick={() => handleRejectRequest(requestUserId)}>
-                        Reject
-                      </button>
-                    </div>
-                  </div>
-                );
-              })
+              <ul className="ad-table ad-table--apps">
+                {filteredApplications.map((request) => (
+                  <li key={request.user_id || request.username}>
+                    <button
+                      type="button"
+                      className="ad-table__row"
+                      onClick={() => setSelectedApplication(request)}
+                    >
+                      <span className="ad-table__primary">{request.store_name || "Unnamed store"}</span>
+                      <span className="ad-table__muted">{request.username}</span>
+                      <span className="ad-table__muted">{request.contact_phone || "—"}</span>
+                      <span className="ad-status ad-status--warning">Pending</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
           </div>
         </article>
 
-        <article className="stat-card">
-          <div className="panel-header">
+        <article className="ad-panel">
+          <header className="ad-panel__head">
             <div>
-              <p className="eyebrow">Products</p>
-              <h2>Low stock alerts</h2>
+              <p className="ad-panel__eyebrow">Inventory</p>
+              <h2>Low stock</h2>
             </div>
-            <span className="pill">4 items</span>
+            <span className="ad-panel__count">{stats.low_stock_products?.length || 0}</span>
+          </header>
+          <div className="ad-panel__body ad-panel__body--scroll">
+            {!stats.low_stock_products?.length ? (
+              <p className="ad-empty">No low-stock alerts.</p>
+            ) : (
+              <ul className="ad-stock-list">
+                {stats.low_stock_products.map((product) => (
+                  <li key={product.id} className="ad-stock-item">
+                    <div>
+                      <strong>{product.name}</strong>
+                      <span>{product.store_name || "—"}</span>
+                    </div>
+                    <span className={`ad-stock-badge${product.stock === 0 ? " ad-stock-badge--out" : ""}`}>
+                      {product.stock} left
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </div>
-
-          <ul className="panel-list">
-            <li>Wireless Headphones - 4 left</li>
-            <li>Smartwatch Series 8 - 6 left</li>
-            <li>Eco-friendly Travel Mug - 2 left</li>
-          </ul>
         </article>
       </section>
+
+      {selectedApplication && (
+        <ApplicationDetailModal
+          application={selectedApplication}
+          onClose={() => setSelectedApplication(null)}
+          onApprove={handleApproveRequest}
+          onReject={handleRejectRequest}
+          acting={actingOnId === selectedApplication.user_id}
+        />
+      )}
+
+      {selectedOrder && (
+        <OrderDetailModal order={selectedOrder} onClose={() => setSelectedOrder(null)} />
+      )}
     </div>
   );
 }

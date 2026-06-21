@@ -1,6 +1,5 @@
 from rest_framework.permissions import BasePermission, SAFE_METHODS
 
-# Permission helper imports
 from .utils import is_admin, is_seller
 
 
