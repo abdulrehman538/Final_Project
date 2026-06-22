@@ -1,3 +1,6 @@
+import aboutStoryImg from "../assets/images/about-story.jpg";
+import aboutStoreBreakImg from "../assets/images/about-store-break.jpg";
+import aboutEcommerceImg from "../assets/images/about-ecommerce.jpg";
 import "./Aboutus.css";
 
 const categories = [
@@ -126,7 +129,7 @@ function AboutUsPage() {
           </div>
           <div>
             <img
-              src="https://images.unsplash.com/photo-1556742049-0cfed4f6a45d"
+              src={aboutStoryImg}
               alt="Our Story"
             />
           </div>
@@ -167,7 +170,7 @@ function AboutUsPage() {
 
       <section className="image-break">
         <img
-          src="https://images.unsplash.com/photo-1607082350899-7e105aa886ae"
+          src={aboutStoreBreakImg}
           alt="Store"
         />
       </section>
@@ -207,7 +210,7 @@ function AboutUsPage() {
         <div className="container ecommerce-grid">
           <div>
             <img
-              src="https://images.unsplash.com/photo-1520607162513-77705c0f0d4a"
+              src={aboutEcommerceImg}
               alt="Ecommerce"
             />
           </div>

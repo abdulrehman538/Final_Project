@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchWithAuth } from "../utils/authSession";
 import { isAdmin, normalizeRole } from "../utils/roles";
+import ModalCloseButton from "../components/ModalCloseButton";
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
 
@@ -283,9 +284,7 @@ function ProfilePage({ onBecomeSeller }) {
                         <h3 id="seller-onboarding-title">Become a seller</h3>
                         <p className="subtext">Set up your store profile, share your business details, and accept the seller agreement in one step.</p>
                       </div>
-                      <button type="button" className="btn btn-secondary" onClick={() => setSellerMode(false)}>
-                        Close
-                      </button>
+                      <ModalCloseButton inline onClick={() => setSellerMode(false)} />
                     </div>
 
                     <div className="seller-upgrade-modal__summary">

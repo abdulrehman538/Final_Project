@@ -1,5 +1,33 @@
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
 
+export function resolveMediaUrl(path) {
+  if (!path) return "";
+  if (path.startsWith("http")) return path;
+  return `${API_BASE}${path.startsWith("/") ? path : `/${path}`}`;
+}
+
+/** All image URLs for a product (main image + gallery). */
+export function collectProductImageUrls(product) {
+  const urls = [];
+  const seen = new Set();
+
+  const push = (raw) => {
+    const resolved = resolveMediaUrl(raw);
+    if (resolved && !seen.has(resolved)) {
+      seen.add(resolved);
+      urls.push(resolved);
+    }
+  };
+
+  if (product?.image) {
+    push(product.image);
+  }
+
+  (product?.images || []).forEach((entry) => push(entry?.image));
+
+  return urls;
+}
+
 export function resolveProductImage(product, size = "600x600") {
   const raw =
     product?.image ||
@@ -8,7 +36,7 @@ export function resolveProductImage(product, size = "600x600") {
     "";
 
   if (raw) {
-    return raw.startsWith("/") ? `${API_BASE}${raw}` : raw;
+    return resolveMediaUrl(raw);
   }
 
   const label = String(product?.name || "Product").slice(0, 16);

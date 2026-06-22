@@ -52,7 +52,16 @@ function ProfileIcon() {
   );
 }
 
-function PortalProfileMenu({ menuRef, isOpen, onToggle, onProfile, onLogout }) {
+function PortalProfileMenu({
+  menuRef,
+  isOpen,
+  onToggle,
+  onProfile,
+  onAbout,
+  onLogout,
+  showProfile = true,
+  showLogout = true,
+}) {
   return (
     <div className="nav-profile-menu" ref={menuRef}>
       <button
@@ -68,22 +77,36 @@ function PortalProfileMenu({ menuRef, isOpen, onToggle, onProfile, onLogout }) {
 
       {isOpen && (
         <div className="nav-profile-dropdown" role="menu">
-          <button
-            type="button"
-            role="menuitem"
-            className="nav-profile-dropdown__item"
-            onClick={onProfile}
-          >
-            My Profile
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            className="nav-profile-dropdown__item nav-profile-dropdown__item--logout"
-            onClick={onLogout}
-          >
-            Logout
-          </button>
+          {showProfile && onProfile && (
+            <button
+              type="button"
+              role="menuitem"
+              className="nav-profile-dropdown__item"
+              onClick={onProfile}
+            >
+              My Profile
+            </button>
+          )}
+          {onAbout && (
+            <button
+              type="button"
+              role="menuitem"
+              className="nav-profile-dropdown__item"
+              onClick={onAbout}
+            >
+              About Us
+            </button>
+          )}
+          {showLogout && onLogout && (
+            <button
+              type="button"
+              role="menuitem"
+              className="nav-profile-dropdown__item nav-profile-dropdown__item--logout"
+              onClick={onLogout}
+            >
+              Logout
+            </button>
+          )}
         </div>
       )}
     </div>
@@ -239,6 +262,34 @@ function AppLayout({
                       <span className="nav-icon-badge">{cartCount}</span>
                     )}
                   </button>
+
+                  <PortalProfileMenu
+                    menuRef={profileMenuRef}
+                    isOpen={profileMenuOpen}
+                    onToggle={() => setProfileMenuOpen((open) => !open)}
+                    showProfile={isAuthenticated}
+                    onProfile={
+                      isAuthenticated
+                        ? () => {
+                            closeProfileMenu();
+                            navigate("/profile");
+                          }
+                        : undefined
+                    }
+                    onAbout={() => {
+                      closeProfileMenu();
+                      navigate("/about");
+                    }}
+                    showLogout={isAuthenticated}
+                    onLogout={
+                      isAuthenticated
+                        ? () => {
+                            closeProfileMenu();
+                            onLogout();
+                          }
+                        : undefined
+                    }
+                  />
                 </div>
               </div>
             </div>
@@ -269,6 +320,10 @@ function AppLayout({
                   onProfile={() => {
                     closeProfileMenu();
                     navigate("/profile");
+                  }}
+                  onAbout={() => {
+                    closeProfileMenu();
+                    navigate("/about");
                   }}
                   onLogout={() => {
                     closeProfileMenu();
@@ -310,6 +365,10 @@ function AppLayout({
                   onProfile={() => {
                     closeProfileMenu();
                     navigate("/profile");
+                  }}
+                  onAbout={() => {
+                    closeProfileMenu();
+                    navigate("/about");
                   }}
                   onLogout={() => {
                     closeProfileMenu();

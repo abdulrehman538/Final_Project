@@ -279,6 +279,22 @@ class AdminStoreSerializer(serializers.ModelSerializer):
         ]
 
 
+class AdminStoreDetailSerializer(AdminStoreSerializer):
+    products = serializers.SerializerMethodField()
+
+    def get_products(self, obj):
+        products = (
+            Product.objects.filter(owner=obj.user)
+            .select_related("owner")
+            .prefetch_related("images")
+            .order_by("-created_at")
+        )
+        return ProductSerializer(products, many=True, context=self.context).data
+
+    class Meta(AdminStoreSerializer.Meta):
+        fields = AdminStoreSerializer.Meta.fields + ["products"]
+
+
 class AdminLowStockProductSerializer(serializers.ModelSerializer):
     class Meta:
         model = Product

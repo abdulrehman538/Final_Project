@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { fetchWithAuth, getAccessToken } from "../utils/authSession";
+import ModalCloseButton from "../components/ModalCloseButton";
 import "./AdminDashboard.css";
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
@@ -86,9 +88,7 @@ function ApplicationDetailModal({ application, onClose, onApprove, onReject, act
             <h2 id="ad-app-title">{application.store_name || "Store application"}</h2>
             <p className="ad-modal__meta">Submitted {formatDate(application.updated_at)}</p>
           </div>
-          <button type="button" className="ad-modal__close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
+          <ModalCloseButton inline onClick={onClose} />
         </header>
 
         <div className="ad-modal__body">
@@ -193,7 +193,7 @@ function OrderDetailModal({ order, onClose }) {
             <h2>Order #{order.id}</h2>
             <p className="ad-modal__meta">{formatDate(order.created_at)}</p>
           </div>
-          <button type="button" className="ad-modal__close" onClick={onClose} aria-label="Close">×</button>
+          <ModalCloseButton inline onClick={onClose} />
         </header>
         <div className="ad-modal__body">
           <dl className="ad-detail-grid">
@@ -248,6 +248,7 @@ function OrderDetailModal({ order, onClose }) {
 }
 
 function AdminDashboard() {
+  const navigate = useNavigate();
   const [stats, setStats] = useState(emptyStats);
   const [sellerRequests, setSellerRequests] = useState([]);
   const [orders, setOrders] = useState([]);
@@ -369,6 +370,58 @@ function AdminDashboard() {
     }
   };
 
+  const handleBanStore = async (userId, storeName) => {
+    if (!userId) return;
+    const label = storeName || "this store";
+    if (!window.confirm(`Ban ${label}? Products will be hidden and the seller cannot list or sell.`)) {
+      return;
+    }
+    setActingOnId(userId);
+    try {
+      const response = await fetchWithAuth(`${API_BASE}/api/admin/stores/ban/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        setMessage(data.detail || "Store banned.");
+        await loadData();
+        await loadStores(storeSearch);
+      } else {
+        setMessage(data.detail || "Failed to ban store.");
+      }
+    } catch {
+      setMessage("Failed to ban store.");
+    } finally {
+      setActingOnId(null);
+    }
+  };
+
+  const handleUnbanStore = async (userId) => {
+    if (!userId) return;
+    setActingOnId(userId);
+    try {
+      const response = await fetchWithAuth(`${API_BASE}/api/admin/stores/unban/`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (response.ok) {
+        setMessage(data.detail || "Store restored.");
+        await loadData();
+        await loadStores(storeSearch);
+      } else {
+        setMessage(data.detail || "Failed to restore store.");
+      }
+    } catch {
+      setMessage("Failed to restore store.");
+    } finally {
+      setActingOnId(null);
+    }
+  };
+
   const volumeMax = Number(stats.order_volume_max) || 1;
 
   return (
@@ -481,17 +534,18 @@ function AdminDashboard() {
       </section>
 
       <section className="ad-panels ad-panels--stores">
-        <article className="ad-panel ad-panel--stores-grid">
+        <article className="ad-panel ad-panel--stores-full">
           <header className="ad-panel__head ad-panel__head--split">
             <div>
               <p className="ad-panel__eyebrow">Marketplace</p>
-              <h2>Active stores</h2>
+              <h2>Store management</h2>
+              <p className="ad-panel__sub">Search stores, review listings, and ban sellers who violate platform rules.</p>
             </div>
             <div className="ad-panel__head-tools">
               <input
                 type="search"
                 className="ad-search ad-search--inline"
-                placeholder="Search stores…"
+                placeholder="Search by store name…"
                 value={storeSearch}
                 onChange={(e) => setStoreSearch(e.target.value)}
                 aria-label="Search stores"
@@ -499,37 +553,78 @@ function AdminDashboard() {
               <span className="ad-panel__count">{stores.length}</span>
             </div>
           </header>
-          <div className="ad-panel__body ad-panel__body--stores">
+          <div className="ad-panel__body ad-panel__body--stores-list">
             {stores.length === 0 ? (
-              <p className="ad-empty">No active stores match your search.</p>
+              <p className="ad-empty">No stores match your search.</p>
             ) : (
-              <div className="ad-store-grid">
-                {stores.map((store) => (
-                  <article className="ad-store-card" key={store.user_id}>
-                    <div className="ad-store-card__media">
-                      {store.featured_image ? (
-                        <img src={store.featured_image} alt="" />
-                      ) : (
-                        <span className="ad-store-card__placeholder">
-                          {(store.store_name || store.username || "S").slice(0, 1).toUpperCase()}
-                        </span>
-                      )}
-                    </div>
-                    <div className="ad-store-card__body">
-                      <h3>{store.store_name || "Unnamed store"}</h3>
-                      <p className="ad-store-card__owner">@{store.username}</p>
-                      <p className="ad-store-card__desc">
-                        {store.business_description || "No store description provided."}
-                      </p>
-                      <div className="ad-store-card__meta">
-                        <span>{store.contact_phone || "No phone"}</span>
-                        <span className="ad-store-card__products">
-                          {store.product_count} product{store.product_count === 1 ? "" : "s"}
-                        </span>
+              <div className="ad-stores-table">
+                <div className="ad-stores-table__head">
+                  <span>Store</span>
+                  <span>Owner</span>
+                  <span>Products</span>
+                  <span>Status</span>
+                  <span>Action</span>
+                </div>
+                {stores.map((store) => {
+                  const isBanned = store.seller_status === "banned";
+                  return (
+                    <div className="ad-stores-table__row" key={store.user_id}>
+                      <div className="ad-stores-table__store">
+                        <div className="ad-stores-table__thumb">
+                          {store.featured_image ? (
+                            <img src={store.featured_image} alt="" />
+                          ) : (
+                            <span>{(store.store_name || store.username || "S").slice(0, 1).toUpperCase()}</span>
+                          )}
+                        </div>
+                        <div>
+                          <button
+                            type="button"
+                            className="ad-stores-table__name ad-stores-table__name--link"
+                            onClick={() => navigate(`/dashboard/stores/${store.user_id}`)}
+                          >
+                            {store.store_name || "Unnamed store"}
+                          </button>
+                          <p className="ad-stores-table__desc">
+                            {store.business_description || "No description"}
+                          </p>
+                        </div>
+                      </div>
+                      <span className="ad-stores-table__owner">@{store.username}</span>
+                      <span className="ad-stores-table__count">{store.product_count}</span>
+                      <span
+                        className={
+                          isBanned
+                            ? "ad-status ad-status--danger"
+                            : "ad-status ad-status--success"
+                        }
+                      >
+                        {isBanned ? "Banned" : "Active"}
+                      </span>
+                      <div className="ad-stores-table__actions">
+                        {isBanned ? (
+                          <button
+                            type="button"
+                            className="ad-btn ad-btn--primary ad-btn--small"
+                            disabled={actingOnId === store.user_id}
+                            onClick={() => handleUnbanStore(store.user_id)}
+                          >
+                            {actingOnId === store.user_id ? "…" : "Restore store"}
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="ad-btn ad-btn--danger ad-btn--small"
+                            disabled={actingOnId === store.user_id}
+                            onClick={() => handleBanStore(store.user_id, store.store_name)}
+                          >
+                            {actingOnId === store.user_id ? "…" : "Ban store"}
+                          </button>
+                        )}
                       </div>
                     </div>
-                  </article>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>

@@ -9,8 +9,10 @@ def is_admin(user):
 
 
 def is_seller(user):
-    """Return True only for approved sellers."""
+    """Return True only for approved sellers (not banned or pending)."""
     profile = getattr(user, "profile", None)
+    if profile and getattr(profile, "seller_status", "none") == "banned":
+        return False
     return bool(
         user
         and user.is_authenticated
@@ -25,6 +27,14 @@ def is_seller(user):
             )
         )
     )
+
+
+def public_product_queryset(queryset=None):
+    """Products visible on the marketplace (hides banned stores only)."""
+    from .models import Product
+
+    base = queryset if queryset is not None else Product.objects.all()
+    return base.exclude(owner__profile__seller_status="banned")
 
 
 def get_user_role(user):

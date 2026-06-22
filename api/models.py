@@ -40,6 +40,7 @@ class UserProfile(models.Model):
         ('pending', 'Pending approval'),
         ('approved', 'Approved'),
         ('rejected', 'Rejected'),
+        ('banned', 'Banned'),
     ]
 
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")

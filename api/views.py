@@ -26,6 +26,7 @@ from .serializers import (
     UserRegisterSerializer,
     UserProfileSerializer,
     AdminStoreSerializer,
+    AdminStoreDetailSerializer,
     AdminLowStockProductSerializer,
     ProductCommentSerializer,
     OrderSerializer,
@@ -35,7 +36,7 @@ from .serializers import (
 
 from .permissions import IsSellerOrAdminOrReadOnly
 from .authentication import OptionalJWTAuthentication
-from .utils import delete_image_instance, get_user_role, is_admin, is_seller
+from .utils import delete_image_instance, get_user_role, is_admin, is_seller, public_product_queryset
 
 
 class RegisterView(generics.CreateAPIView):
@@ -72,7 +73,9 @@ class ProductSearchView(generics.ListAPIView):
 
     def get_queryset(self):
         query = (self.request.query_params.get("q") or "").strip()
-        queryset = Product.objects.select_related("owner").prefetch_related("images")
+        queryset = public_product_queryset(
+            Product.objects.select_related("owner").prefetch_related("images")
+        )
         if not query:
             return queryset.none()
 
@@ -157,6 +160,79 @@ class RejectSellerRequestView(generics.GenericAPIView):
         })
 
 
+class AdminBanStoreView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_admin(request.user):
+            return Response({"detail": "Only admins can ban stores."}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get("user_id")
+        if not user_id:
+            return Response({"detail": "user_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = UserProfile.objects.select_related("user").filter(user_id=user_id).first()
+        if not profile:
+            return Response({"detail": "Store not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if profile.seller_status not in {"approved", "banned"}:
+            return Response(
+                {"detail": "Only approved stores can be banned."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.seller_status = "banned"
+        profile.is_seller = False
+        profile.save(update_fields=["seller_status", "is_seller", "updated_at"])
+
+        seller_group = Group.objects.filter(name="Seller").first()
+        if seller_group:
+            profile.user.groups.remove(seller_group)
+
+        return Response({
+            "detail": "Store banned from selling.",
+            "username": profile.user.username,
+            "seller_status": profile.seller_status,
+            "is_seller": profile.is_seller,
+        })
+
+
+class AdminUnbanStoreView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_admin(request.user):
+            return Response({"detail": "Only admins can restore stores."}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get("user_id")
+        if not user_id:
+            return Response({"detail": "user_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = UserProfile.objects.select_related("user").filter(user_id=user_id).first()
+        if not profile:
+            return Response({"detail": "Store not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if profile.seller_status != "banned":
+            return Response(
+                {"detail": "This store is not banned."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.seller_status = "approved"
+        profile.is_seller = True
+        profile.save(update_fields=["seller_status", "is_seller", "updated_at"])
+
+        seller_group, _ = Group.objects.get_or_create(name="Seller")
+        profile.user.groups.add(seller_group)
+
+        return Response({
+            "detail": "Store restored and can sell again.",
+            "username": profile.user.username,
+            "seller_status": profile.seller_status,
+            "is_seller": profile.is_seller,
+        })
+
+
 class AdminOrdersView(generics.ListAPIView):
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
@@ -232,8 +308,7 @@ class AdminStoresListView(generics.ListAPIView):
             return UserProfile.objects.none()
 
         queryset = UserProfile.objects.filter(
-            is_seller=True,
-            seller_status="approved",
+            seller_status__in=["approved", "banned"],
         ).select_related("user").annotate(
             product_count=Count("user__products", distinct=True),
         ).order_by("store_name")
@@ -248,6 +323,24 @@ class AdminStoresListView(generics.ListAPIView):
             )
 
         return queryset
+
+
+class AdminStoreDetailView(generics.RetrieveAPIView):
+    serializer_class = AdminStoreDetailSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if not is_admin(self.request.user):
+            return UserProfile.objects.none()
+
+        return UserProfile.objects.filter(
+            seller_status__in=["approved", "banned"],
+        ).select_related("user").annotate(
+            product_count=Count("user__products", distinct=True),
+        )
+
+    def get_object(self):
+        return get_object_or_404(self.get_queryset(), user_id=self.kwargs["user_id"])
 
 
 class OrderStatusUpdateView(generics.GenericAPIView):
@@ -327,6 +420,12 @@ class ProductListCreateView(generics.ListCreateAPIView):
         parsers.FormParser,
     )
 
+    def get_queryset(self):
+        base = Product.objects.select_related("owner").prefetch_related("images")
+        if self.request.method in SAFE_METHODS:
+            return public_product_queryset(base)
+        return base
+
     def perform_create(self, serializer):
         user = self.request.user
         profile = getattr(user, "profile", None)
@@ -354,6 +453,12 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
         parsers.MultiPartParser,
         parsers.FormParser,
     )
+
+    def get_queryset(self):
+        base = Product.objects.select_related("owner").prefetch_related("images")
+        if self.request.method in SAFE_METHODS and not is_admin(self.request.user):
+            return public_product_queryset(base)
+        return base
 
     def perform_update(self, serializer):
         product = serializer.save()
@@ -564,6 +669,18 @@ class CheckoutView(generics.GenericAPIView):
                         return Response(
                             {'detail': f'Product {product_id} not found'},
                             status=status.HTTP_404_NOT_FOUND
+                        )
+
+                    owner_profile = getattr(product.owner, "profile", None) if product.owner_id else None
+                    if owner_profile and owner_profile.seller_status == "banned":
+                        return Response(
+                            {
+                                'detail': (
+                                    f'{product.name} is unavailable — '
+                                    'this store has been suspended by admin.'
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
                         )
 
                     if product.stock < quantity:

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchWithAuth, getAccessToken } from "../utils/authSession";
+import ModalCloseButton from "../components/ModalCloseButton";
 import "./SellerOrdersPage.css";
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
@@ -148,9 +149,7 @@ function OrderDetailModal({ order, sellerUsername, updating, onClose, onUpdateSt
             <h2 id="so-modal-title">Order #{order.id}</h2>
             <p className="so-modal__meta">Placed {formatOrderDate(order.created_at)}</p>
           </div>
-          <button type="button" className="so-modal__close" onClick={onClose} aria-label="Close">
-            ×
-          </button>
+          <ModalCloseButton inline onClick={onClose} />
         </header>
 
         <div className="so-modal__toolbar">

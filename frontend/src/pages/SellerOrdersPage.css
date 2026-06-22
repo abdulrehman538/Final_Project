@@ -238,25 +238,6 @@
   font-size: 0.78rem;
 }
 
-.so-modal__close {
-  flex-shrink: 0;
-  width: 36px;
-  height: 36px;
-  border: none;
-  border-radius: 10px;
-  background: #f1f5f9;
-  color: #64748b;
-  font-size: 1.4rem;
-  line-height: 1;
-  cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
-}
-
-.so-modal__close:hover {
-  background: #e2e8f0;
-  color: #111827;
-}
-
 .so-modal__toolbar {
   display: flex;
   align-items: center;

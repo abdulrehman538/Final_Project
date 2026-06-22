@@ -13,6 +13,7 @@ import {
 import SellerDashboard from "./pages/SellerDashboard";
 import AuthPage from "./pages/AuthPage";
 import AdminDashboard from "./pages/AdminDashboard";
+import AdminStorePage from "./pages/AdminStorePage";
 import Marketplace from "./pages/Marketplace";
 import ProductDetail from "./pages/ProductDetail";
 import CartPage from "./pages/CartPage";
@@ -346,6 +347,22 @@ function App() {
         <Route path="/portal" element={<AuthPage onLogin={handleLogin} portalOnly />} />
         <Route path="/login" element={<Navigate to="/portal" replace />} />
         <Route path="/register" element={<Navigate to="/portal?mode=signup" replace />} />
+
+        <Route
+          path="/dashboard/stores/:userId"
+          element={
+            <ProtectedRoute allowedRoles={["admin"]}>
+              <AppLayout
+                role="admin"
+                title="Store Preview"
+                onLogout={handleLogout}
+                isAuthenticated={isAuthenticated}
+              >
+                <AdminStorePage />
+              </AppLayout>
+            </ProtectedRoute>
+          }
+        />
 
         <Route
           path="/dashboard"

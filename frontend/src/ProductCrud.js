@@ -1,12 +1,42 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { fetchWithAuth } from "./utils/authSession";
+import { collectProductImageUrls, resolveMediaUrl, resolveProductImage } from "./utils/productImage";
+import ModalCloseButton from "./components/ModalCloseButton";
 import "./ProductCrud.css";
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
 
+function toEditableImageState(product) {
+  const items = [];
+
+  if (product?.image) {
+    items.push({
+      id: `main-${product.id}`,
+      name: product.image.split("/").pop() || "main.jpg",
+      existing: true,
+      isMain: true,
+      recordId: null,
+      url: product.image,
+    });
+  }
+
+  (product?.images || []).forEach((img) => {
+    items.push({
+      id: `exist-${img.id}`,
+      name: img.image?.split("/").pop() || `img-${img.id}`,
+      existing: true,
+      recordId: img.id,
+      url: img.image,
+    });
+  });
+
+  return items;
+}
+
 function ProductCrud({ role = "user" }) {
   const navigate = useNavigate();
+  const location = useLocation();
   const [products, setProducts] = useState([]);
   const [profileStoreName, setProfileStoreName] = useState("");
   const [name, setName] = useState("");
@@ -26,6 +56,7 @@ function ProductCrud({ role = "user" }) {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [selectedProduct, setSelectedProduct] = useState(null);
   const [isEditing, setIsEditing] = useState(false);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
 
   const isSeller = role === "seller";
 
@@ -174,17 +205,85 @@ function ProductCrud({ role = "user" }) {
     }
   };
 
-  const getImageSrc = (url) => {
-    if (!url) return null;
-    if (url.startsWith("http")) return url;
-    return `http://127.0.0.1:8000${url}`;
-  };
-
   const revokePreviewUrl = (image) => {
     if (image?.preview) {
       URL.revokeObjectURL(image.preview);
     }
   };
+
+  const openProductModal = (product, startInEditMode = false) => {
+    setSelectedProduct(product);
+    setIsEditing(startInEditMode);
+    setName(product.name || "");
+    setDescription(product.description || "");
+    setPrice(product.price || "");
+    setStock(product.stock ?? "");
+    setCategory(product.category || "");
+    setEditId(product.id);
+    setImages(toEditableImageState(product));
+    setActiveImageIndex(0);
+    setShowDetailModal(true);
+  };
+
+  const closeProductModal = () => {
+    images.forEach(revokePreviewUrl);
+    setShowDetailModal(false);
+    setSelectedProduct(null);
+    setIsEditing(false);
+    setActiveImageIndex(0);
+    setEditId(null);
+  };
+
+  const getThumbSrc = (img) => {
+    if (!img) return resolveProductImage(selectedProduct || {}, "400x400");
+    return img.preview || resolveMediaUrl(img.url);
+  };
+
+  const handleImageUpload = (fileList) => {
+    const files = Array.from(fileList);
+    const newFiles = files.map((file) => ({
+      id: Date.now() + Math.random(),
+      name: file.name,
+      file,
+      preview: URL.createObjectURL(file),
+    }));
+    setImages((current) => {
+      const next = [...current, ...newFiles];
+      if (current.length === 0) {
+        setActiveImageIndex(0);
+      }
+      return next;
+    });
+  };
+
+  const removeImageAt = (img) => {
+    if (img.existing && img.recordId) {
+      deleteProductImage(img.recordId);
+      return;
+    }
+    revokePreviewUrl(img);
+    setImages((prev) => {
+      const next = prev.filter((x) => x.id !== img.id);
+      setActiveImageIndex((idx) => Math.min(idx, Math.max(0, next.length - 1)));
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    const rawId = location.state?.viewProductId;
+    if (!rawId || products.length === 0) {
+      return;
+    }
+
+    const targetId = Number(rawId);
+    const product = products.find((p) => p.id === targetId);
+    if (!product) {
+      return;
+    }
+
+    openProductModal(product, false);
+    navigate(location.pathname, { replace: true, state: null });
+  }, [location.state?.viewProductId, products, location.pathname, navigate]);
 
   const filteredProducts = products
     .filter((product) => {
@@ -228,30 +327,50 @@ function ProductCrud({ role = "user" }) {
     }
   };
 
-  function ImageGallery({ images = [] }) {
-    const imgs = images.map((i) => (typeof i === "string" ? i : i.image || i.url));
+  function ImageGallery({ product }) {
+    const urls = collectProductImageUrls(product);
     const [index, setIndex] = useState(0);
 
     useEffect(() => {
-      if (imgs.length < 2) return;
-      const t = setInterval(() => setIndex((i) => (i + 1) % imgs.length), 3000);
-      return () => clearInterval(t);
-    }, [imgs.length]);
+      setIndex(0);
+    }, [product?.id]);
 
-    if (!imgs || imgs.length === 0) {
-      return (
-        <div className="product-detail-thumb">
-          <img src={`https://placehold.co/400x400/fdf2e8/f57224?text=No+Image`} alt="placeholder" style={{ width: "100%", height: "260px", objectFit: "cover", borderRadius: "16px" }} />
-        </div>
-      );
-    }
+    useEffect(() => {
+      if (urls.length < 2) return undefined;
+      const timer = setInterval(() => setIndex((i) => (i + 1) % urls.length), 4000);
+      return () => clearInterval(timer);
+    }, [urls.length]);
+
+    const hero = urls[index] || resolveProductImage(product, "600x600");
 
     return (
-      <div className="product-detail-thumb">
-        <img src={getImageSrc(imgs[index])} alt={`product-${index}`} style={{ width: "100%", height: "260px", objectFit: "cover", borderRadius: "16px" }} />
+      <div className="store-gallery">
+        <div className="store-gallery__hero">
+          <img src={hero} alt={product?.name || "Product"} />
+        </div>
+        {urls.length > 1 && (
+          <div className="store-gallery__thumbs">
+            {urls.map((src, thumbIndex) => (
+              <button
+                key={src}
+                type="button"
+                className={`store-gallery__thumb${index === thumbIndex ? " is-active" : ""}`}
+                onClick={() => setIndex(thumbIndex)}
+                aria-label={`View image ${thumbIndex + 1}`}
+              >
+                <img src={src} alt="" />
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     );
   }
+
+  const editHeroSrc =
+    images.length > 0
+      ? getThumbSrc(images[activeImageIndex] || images[0])
+      : resolveProductImage(selectedProduct || {}, "600x600");
 
   return (
     <div className="my-store-container">
@@ -299,35 +418,13 @@ function ProductCrud({ role = "user" }) {
         ) : (
           <div className="my-store-products-grid">
             {filteredProducts.map((product) => {
-              const firstImage = (product.images && product.images[0] && product.images[0].image) || product.image_url;
-              const resolvedImage = firstImage ? (firstImage.startsWith("/") ? `http://127.0.0.1:8000${firstImage}` : firstImage) : null;
-              const image =
-                resolvedImage ||
-                `https://placehold.co/400x400/fdf2e8/f57224?text=${encodeURIComponent(String(product.name || "Product").slice(0, 10))}`;
+              const image = resolveProductImage(product, "400x400");
 
               return (
                 <article
                   className="my-store-product-card"
                   key={product.id}
-                  onClick={() => {
-                    setSelectedProduct(product);
-                    setIsEditing(false);
-                    setName(product.name || "");
-                    setDescription(product.description || "");
-                    setPrice(product.price || "");
-                    setStock(product.stock ?? "");
-                    setCategory(product.category || "");
-                    setEditId(product.id);
-                    const existing = (product.images || []).map((img) => ({
-                      id: `exist-${img.id}`,
-                      name: img.image ? img.image.split('/').pop() : `img-${img.id}`,
-                      existing: true,
-                      recordId: img.id,
-                      url: img.image,
-                    }));
-                    setImages(existing);
-                    setShowDetailModal(true);
-                  }}
+                  onClick={() => openProductModal(product, false)}
                 >
                   <div className="product-card-img-container">
                     <img src={image} alt={product.name} />
@@ -396,15 +493,20 @@ function ProductCrud({ role = "user" }) {
         </div>
       </aside>
 
-      {/* Add Product Dialog Modal */}
       {showAddModal && (
-        <div className="modal-overlay">
-          <div className="add-product-modal card fade-in" style={{ width: "min(560px, 100%)" }}>
-            <button className="modal-close" onClick={() => setShowAddModal(false)}>&times;</button>
-            <div className="modal-header">
-              <p className="eyebrow">Store Catalog</p>
-              <h2>Add New Product</h2>
-            </div>
+        <div className="store-modal-overlay" onClick={() => setShowAddModal(false)}>
+          <div
+            className="store-modal store-modal--compact"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="add-product-title"
+          >
+            <ModalCloseButton onClick={() => setShowAddModal(false)} />
+            <header className="store-modal__header">
+              <p className="store-modal__eyebrow">Store catalog</p>
+              <h2 id="add-product-title">Add new product</h2>
+            </header>
 
             <form
               onSubmit={async (e) => {
@@ -414,83 +516,63 @@ function ProductCrud({ role = "user" }) {
                 setSuccessMessage("Product added successfully!");
                 setTimeout(() => setSuccessMessage(""), 3000);
               }}
-              className="modal-form-content"
-              style={{ display: "grid", gap: "14px", marginTop: "16px" }}
+              className="store-modal__form"
             >
-              <div>
-                <label className="field-label">Product Name</label>
+              <div className="store-form-field">
+                <label className="field-label">Product name</label>
                 <input className="field-input field-input--small" type="text" placeholder="e.g. Mechanical Keyboard" value={name} onChange={(e) => setName(e.target.value)} required />
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                <div>
+              <div className="store-form-row">
+                <div className="store-form-field">
                   <label className="field-label">Category</label>
                   <input className="field-input field-input--small" type="text" placeholder="e.g. Keyboards" value={category} onChange={(e) => setCategory(e.target.value)} required />
                 </div>
-                <div>
+                <div className="store-form-field">
                   <label className="field-label">Price ($)</label>
                   <input className="field-input field-input--small" type="number" step="0.01" placeholder="e.g. 59.99" value={price} onChange={(e) => setPrice(e.target.value)} required />
                 </div>
               </div>
 
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                <div>
-                  <label className="field-label">Stock Units</label>
+              <div className="store-form-row">
+                <div className="store-form-field">
+                  <label className="field-label">Stock units</label>
                   <input className="field-input field-input--small" type="number" placeholder="e.g. 20" value={stock} onChange={(e) => setStock(e.target.value)} required />
                 </div>
-                <div>
-                  <label className="field-label">Store Name</label>
+                <div className="store-form-field">
+                  <label className="field-label">Store name</label>
                   <input className="field-input field-input--small" type="text" value={isSeller ? profileStoreName : storeName} readOnly={isSeller} onChange={(e) => setStoreName(e.target.value)} />
                 </div>
               </div>
 
-              <div>
+              <div className="store-form-field">
                 <label className="field-label">Description</label>
-                <textarea className="field-input field-input--small" rows="3" placeholder="Enter product descriptions..." value={description} onChange={(e) => setDescription(e.target.value)} />
+                <textarea className="field-input field-input--small" rows="3" placeholder="Enter product description…" value={description} onChange={(e) => setDescription(e.target.value)} />
               </div>
 
-              <div>
-                <label className="field-label">Product Images</label>
-                <label className="image-upload-card-compact" style={{ display: "block", border: "2px dashed var(--border)", padding: "14px", borderRadius: "12px", textAlign: "center", cursor: "pointer", background: "var(--surface-soft)" }}>
+              <div className="store-form-field">
+                <label className="field-label">Product images</label>
+                <label className="store-upload-zone">
                   <input
                     type="file"
                     multiple
                     accept="image/*"
                     className="image-upload-input"
                     onChange={(e) => {
-                      const files = Array.from(e.target.files);
-                      const newFiles = files.map((file) => ({
-                        id: Date.now() + Math.random(),
-                        name: file.name,
-                        progress: 100,
-                        file,
-                        preview: URL.createObjectURL(file),
-                      }));
-                      setImages((current) => [...current, ...newFiles]);
+                      handleImageUpload(e.target.files);
                       e.target.value = null;
                     }}
-                    style={{ display: "none" }}
                   />
-                  <span>📁 Upload Image Files</span>
+                  <span className="store-upload-zone__icon">+</span>
+                  <span className="store-upload-zone__text">Upload photos</span>
                 </label>
 
                 {images.length > 0 && (
-                  <div className="uploaded-thumbnails" style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "10px" }}>
-                    {images.map((img) => (
-                      <div className="uploaded-thumbnail-item" key={img.id} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border)" }}>
-                        <img src={img.preview || getImageSrc(img.url)} alt="preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                        <button
-                          type="button"
-                          onClick={() => {
-                            if (img.existing) {
-                              deleteProductImage(img.recordId);
-                            } else {
-                              revokePreviewUrl(img);
-                              setImages(prev => prev.filter(x => x.id !== img.id));
-                            }
-                          }}
-                          style={{ position: "absolute", top: "2px", right: "2px", width: "16px", height: "16px", borderRadius: "50%", background: "rgba(0,0,0,0.6)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", border: "none", fontSize: "10px", cursor: "pointer" }}
-                        >
+                  <div className="store-image-strip">
+                    {images.map((img, imgIndex) => (
+                      <div className="store-image-strip__item" key={img.id}>
+                        <img src={getThumbSrc(img)} alt="" />
+                        <button type="button" className="store-image-strip__remove" onClick={() => removeImageAt(img)} aria-label="Remove image">
                           &times;
                         </button>
                       </div>
@@ -499,20 +581,25 @@ function ProductCrud({ role = "user" }) {
                 )}
               </div>
 
-              <div className="modal-actions-row" style={{ display: "flex", gap: "12px", marginTop: "14px", justifyContent: "flex-end" }}>
+              <footer className="store-modal__footer">
                 <button type="button" className="btn btn-secondary" onClick={() => setShowAddModal(false)}>Cancel</button>
-                <button type="submit" className="btn btn-primary">Add Product</button>
-              </div>
+                <button type="submit" className="btn btn-primary">Add product</button>
+              </footer>
             </form>
           </div>
         </div>
       )}
 
-      {/* Product Detail / Edit Dialog Modal */}
       {showDetailModal && selectedProduct && (
-        <div className="modal-overlay">
-          <div className="product-details-modal card fade-in" style={{ width: "min(560px, 100%)", padding: "32px" }}>
-            <button className="modal-close" onClick={() => setShowDetailModal(false)}>&times;</button>
+        <div className="store-modal-overlay" onClick={closeProductModal}>
+          <div
+            className={`store-modal${isEditing ? " store-modal--edit" : " store-modal--detail"}`}
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="product-modal-title"
+          >
+            <ModalCloseButton onClick={closeProductModal} />
 
             {isEditing ? (
               <form
@@ -520,159 +607,203 @@ function ProductCrud({ role = "user" }) {
                   e.preventDefault();
                   await updateProduct();
                   setIsEditing(false);
-                  setShowDetailModal(false);
+                  setSelectedProduct((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          name,
+                          description,
+                          price,
+                          stock: Number(stock),
+                          category,
+                        }
+                      : prev
+                  );
                   setSuccessMessage("Product updated successfully!");
                   setTimeout(() => setSuccessMessage(""), 3000);
                 }}
-                className="modal-form-content"
-                style={{ display: "grid", gap: "14px" }}
+                className="store-edit-layout"
               >
-                <div className="modal-header">
-                  <p className="eyebrow">Catalog Administration</p>
-                  <h2>Edit Product</h2>
-                </div>
-
-                <div>
-                  <label className="field-label">Product Name</label>
-                  <input className="field-input field-input--small" type="text" value={name} onChange={(e) => setName(e.target.value)} required />
-                </div>
-
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
+                <header className="store-modal__header store-modal__header--border">
                   <div>
-                    <label className="field-label">Category</label>
-                    <input className="field-input field-input--small" type="text" value={category} onChange={(e) => setCategory(e.target.value)} required />
+                    <p className="store-modal__eyebrow">Edit listing</p>
+                    <h2 id="product-modal-title">{name || "Product"}</h2>
+                    <p className="store-modal__meta">ID #{editId} · {category || "Uncategorized"}</p>
                   </div>
-                  <div>
-                    <label className="field-label">Price ($)</label>
-                    <input className="field-input field-input--small" type="number" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} required />
-                  </div>
-                </div>
+                </header>
 
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "12px" }}>
-                  <div>
-                    <label className="field-label">Stock Units</label>
-                    <input className="field-input field-input--small" type="number" value={stock} onChange={(e) => setStock(e.target.value)} required />
-                  </div>
-                  <div>
-                    <label className="field-label">Store Name</label>
-                    <input className="field-input field-input--small" type="text" value={isSeller ? profileStoreName : storeName} readOnly={isSeller} onChange={(e) => setStoreName(e.target.value)} />
-                  </div>
-                </div>
+                <div className="store-edit-layout__body">
+                  <aside className="store-edit-media">
+                    <div className="store-edit-media__hero">
+                      <img src={editHeroSrc} alt={name || "Product preview"} />
+                    </div>
 
-                <div>
-                  <label className="field-label">Description</label>
-                  <textarea className="field-input field-input--small" rows="3" value={description} onChange={(e) => setDescription(e.target.value)} />
-                </div>
-
-                <div>
-                  <label className="field-label">Product Images</label>
-                  <label className="image-upload-card-compact" style={{ display: "block", border: "2px dashed var(--border)", padding: "14px", borderRadius: "12px", textAlign: "center", cursor: "pointer", background: "var(--surface-soft)" }}>
-                    <input
-                      type="file"
-                      multiple
-                      accept="image/*"
-                      className="image-upload-input"
-                      onChange={(e) => {
-                        const files = Array.from(e.target.files);
-                        const newFiles = files.map((file) => ({
-                          id: Date.now() + Math.random(),
-                          name: file.name,
-                          progress: 100,
-                          file,
-                          preview: URL.createObjectURL(file),
-                        }));
-                        setImages((current) => [...current, ...newFiles]);
-                        e.target.value = null;
-                      }}
-                      style={{ display: "none" }}
-                    />
-                    <span>📁 Add More Images</span>
-                  </label>
-
-                  {images.length > 0 && (
-                    <div className="uploaded-thumbnails" style={{ display: "flex", gap: "10px", flexWrap: "wrap", marginTop: "10px" }}>
-                      {images.map((img) => (
-                        <div className="uploaded-thumbnail-item" key={img.id} style={{ position: "relative", width: "64px", height: "64px", borderRadius: "8px", overflow: "hidden", border: "1px solid var(--border)" }}>
-                          <img src={img.preview || getImageSrc(img.url)} alt="preview" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (img.existing) {
-                                deleteProductImage(img.recordId);
-                              } else {
-                                revokePreviewUrl(img);
-                                setImages(prev => prev.filter(x => x.id !== img.id));
-                              }
-                            }}
-                            style={{ position: "absolute", top: "2px", right: "2px", width: "16px", height: "16px", borderRadius: "50%", background: "rgba(0,0,0,0.6)", color: "#fff", display: "flex", alignItems: "center", justifyContent: "center", border: "none", fontSize: "10px", cursor: "pointer" }}
+                    {images.length > 0 && (
+                      <div className="store-image-strip store-image-strip--large">
+                        {images.map((img, imgIndex) => (
+                          <div
+                            key={img.id}
+                            className={`store-image-strip__item store-image-strip__item--selectable${activeImageIndex === imgIndex ? " is-active" : ""}`}
+                            onClick={() => setActiveImageIndex(imgIndex)}
+                            onKeyDown={(e) => e.key === "Enter" && setActiveImageIndex(imgIndex)}
+                            role="button"
+                            tabIndex={0}
                           >
-                            &times;
-                          </button>
-                        </div>
-                      ))}
+                            <img src={getThumbSrc(img)} alt="" />
+                            {img.recordId && (
+                              <button
+                                type="button"
+                                className="store-image-strip__remove"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  removeImageAt(img);
+                                }}
+                                aria-label="Remove image"
+                              >
+                                &times;
+                              </button>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <label className="store-upload-zone store-upload-zone--inline">
+                      <input
+                        type="file"
+                        multiple
+                        accept="image/*"
+                        onChange={(e) => {
+                          handleImageUpload(e.target.files);
+                          e.target.value = null;
+                        }}
+                      />
+                      <span className="store-upload-zone__icon">+</span>
+                      <span className="store-upload-zone__text">Add more photos</span>
+                    </label>
+                  </aside>
+
+                  <div className="store-edit-fields">
+                    <div className="store-form-field">
+                      <label className="field-label">Product name</label>
+                      <input className="field-input" type="text" value={name} onChange={(e) => setName(e.target.value)} required />
                     </div>
-                  )}
-                </div>
 
-                <div className="modal-actions-row" style={{ display: "flex", gap: "12px", justifyContent: "flex-end", marginTop: "14px" }}>
-                  <button type="button" className="btn btn-secondary" onClick={() => setIsEditing(false)}>Cancel Edit</button>
-                  <button type="submit" className="btn btn-primary">Save Changes</button>
-                </div>
-              </form>
-            ) : (
-              <div className="product-details-view">
-                <div className="modal-header">
-                  <p className="eyebrow">{selectedProduct.category || "Uncategorized"}</p>
-                  <h2>{selectedProduct.name}</h2>
-                </div>
-
-                <div className="details-body" style={{ marginTop: "16px" }}>
-                  <div className="details-image-gallery" style={{ marginBottom: "20px" }}>
-                    <ImageGallery images={(selectedProduct.images || []).map((i) => i.image)} />
-                  </div>
-
-                  <div className="details-info-grid" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "16px", margin: "20px 0" }}>
-                    <div className="detail-info-block" style={{ padding: "14px", background: "var(--surface-soft)", borderRadius: "12px", border: "1px solid var(--border)" }}>
-                      <span style={{ fontSize: "0.85rem", color: "var(--muted)", display: "block", marginBottom: "4px" }}>Unit Price</span>
-                      <strong style={{ fontSize: "1.35rem", color: "var(--primary-strong)" }}>${Number(selectedProduct.price || 0).toFixed(2)}</strong>
+                    <div className="store-form-row">
+                      <div className="store-form-field">
+                        <label className="field-label">Category</label>
+                        <input className="field-input" type="text" value={category} onChange={(e) => setCategory(e.target.value)} required />
+                      </div>
+                      <div className="store-form-field">
+                        <label className="field-label">Price ($)</label>
+                        <input className="field-input" type="number" step="0.01" value={price} onChange={(e) => setPrice(e.target.value)} required />
+                      </div>
                     </div>
-                    <div className="detail-info-block" style={{ padding: "14px", background: "var(--surface-soft)", borderRadius: "12px", border: "1px solid var(--border)" }}>
-                      <span style={{ fontSize: "0.85rem", color: "var(--muted)", display: "block", marginBottom: "4px" }}>Stock Available</span>
-                      <strong style={{ fontSize: "1.35rem", color: selectedProduct.stock > 0 ? "var(--success)" : "var(--danger)" }}>
-                        {selectedProduct.stock ?? 0} units
-                      </strong>
+
+                    <div className="store-form-row">
+                      <div className="store-form-field">
+                        <label className="field-label">Stock units</label>
+                        <input className="field-input" type="number" value={stock} onChange={(e) => setStock(e.target.value)} required />
+                      </div>
+                      <div className="store-form-field">
+                        <label className="field-label">Store name</label>
+                        <input className="field-input" type="text" value={isSeller ? profileStoreName : storeName} readOnly={isSeller} onChange={(e) => setStoreName(e.target.value)} />
+                      </div>
+                    </div>
+
+                    <div className="store-form-field">
+                      <label className="field-label">Description</label>
+                      <textarea className="field-input" rows="5" value={description} onChange={(e) => setDescription(e.target.value)} placeholder="Describe your product for buyers…" />
                     </div>
                   </div>
-
-                  <div className="detail-description">
-                    <h4 style={{ margin: "0 0 8px 0" }}>Product Description</h4>
-                    <p className="subtext" style={{ fontSize: "0.95rem", lineHeight: "1.6" }}>{selectedProduct.description || "No description provided."}</p>
-                  </div>
                 </div>
 
-                <div className="modal-actions-row" style={{ display: "flex", gap: "12px", marginTop: "24px", justifyContent: "flex-end" }}>
+                <footer className="store-modal__footer store-modal__footer--split">
                   <button
                     type="button"
-                    className="btn btn-secondary"
-                    onClick={() => setIsEditing(true)}
-                  >
-                    Edit Product
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-danger"
+                    className="btn btn-danger btn-ghost"
                     onClick={async () => {
-                      if (window.confirm("Are you sure you want to delete this product?")) {
+                      if (window.confirm("Delete this product permanently?")) {
                         await deleteProduct(selectedProduct.id);
-                        setShowDetailModal(false);
+                        closeProductModal();
                         setSuccessMessage("Product deleted successfully!");
                         setTimeout(() => setSuccessMessage(""), 3000);
                       }
                     }}
                   >
-                    Delete Product
+                    Delete product
                   </button>
+                  <div className="store-modal__footer-actions">
+                    <button type="button" className="btn btn-secondary" onClick={() => setIsEditing(false)}>View details</button>
+                    <button type="submit" className="btn btn-primary">Save changes</button>
+                  </div>
+                </footer>
+              </form>
+            ) : (
+              <div className="store-detail-layout">
+                <header className="store-modal__header store-modal__header--border">
+                  <div>
+                    <p className="store-modal__eyebrow">{selectedProduct.category || "Uncategorized"}</p>
+                    <h2 id="product-modal-title">{selectedProduct.name}</h2>
+                    <p className="store-modal__meta">{selectedProduct.store_name || profileStoreName}</p>
+                  </div>
+                </header>
+
+                <div className="store-detail-layout__body">
+                  <ImageGallery product={selectedProduct} />
+
+                  <div className="store-detail-stats">
+                    <div className="store-detail-stat">
+                      <span>Unit price</span>
+                      <strong>${Number(selectedProduct.price || 0).toFixed(2)}</strong>
+                    </div>
+                    <div className="store-detail-stat">
+                      <span>Stock available</span>
+                      <strong className={selectedProduct.stock > 0 ? "is-ok" : "is-low"}>
+                        {selectedProduct.stock ?? 0} units
+                      </strong>
+                    </div>
+                  </div>
+
+                  <div className="store-detail-description">
+                    <h3>Description</h3>
+                    <p>{selectedProduct.description || "No description provided."}</p>
+                  </div>
                 </div>
+
+                <footer className="store-modal__footer">
+                  <button type="button" className="btn btn-secondary" onClick={closeProductModal}>Close</button>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => {
+                      setName(selectedProduct.name || "");
+                      setDescription(selectedProduct.description || "");
+                      setPrice(selectedProduct.price || "");
+                      setStock(selectedProduct.stock ?? "");
+                      setCategory(selectedProduct.category || "");
+                      setImages(toEditableImageState(selectedProduct));
+                      setActiveImageIndex(0);
+                      setIsEditing(true);
+                    }}
+                  >
+                    Edit info
+                  </button>
+                  <button
+                    type="button"
+                    className="btn btn-danger"
+                    onClick={async () => {
+                      if (window.confirm("Delete this product permanently?")) {
+                        await deleteProduct(selectedProduct.id);
+                        closeProductModal();
+                        setSuccessMessage("Product deleted successfully!");
+                        setTimeout(() => setSuccessMessage(""), 3000);
+                      }
+                    }}
+                  >
+                    Delete
+                  </button>
+                </footer>
               </div>
             )}
           </div>

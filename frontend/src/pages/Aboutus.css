@@ -46,7 +46,7 @@ letter-spacing: 1px;
 .about-hero {
 height: 80vh;
 min-height: 550px;
-background-image: url("https://images.unsplash.com/photo-1607082350920-8d1d0b1f8d1a");
+background-image: url("../assets/images/about-hero.jpg");
 background-size: cover;
 background-position: center;
 position: relative;

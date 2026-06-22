@@ -139,21 +139,37 @@
   gap: 8px;
 }
 
+.sd-product-list li {
+  list-style: none;
+}
+
 .sd-product-row {
   display: grid;
   grid-template-columns: 52px minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 10px;
+  width: 100%;
   padding: 8px 10px;
+  margin: 0;
   border-radius: 12px;
   border: 1px solid rgba(229, 231, 235, 0.85);
   background: #fafbfc;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+}
+
+.sd-product-row:focus-visible {
+  outline: 2px solid rgba(245, 114, 36, 0.45);
+  outline-offset: 2px;
 }
 
 .sd-product-row:hover {
   border-color: rgba(245, 114, 36, 0.25);
   box-shadow: 0 4px 12px rgba(245, 114, 36, 0.08);
+  transform: translateY(-1px);
 }
 
 .sd-product-row__thumb {

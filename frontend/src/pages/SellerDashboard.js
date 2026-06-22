@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useLocation } from "react-router-dom";
+import { useLocation, useNavigate } from "react-router-dom";
 import { fetchWithAuth, getAccessToken } from "../utils/authSession";
 import { getProductMeta, resolveProductImage } from "../utils/productImage";
 import "./SellerDashboard.css";
@@ -34,6 +34,7 @@ function getStatusClass(status) {
 
 function SellerDashboard() {
   const location = useLocation();
+  const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [sellerOrders, setSellerOrders] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -168,20 +169,31 @@ function SellerDashboard() {
                 {products.slice(0, 10).map((product) => {
                   const meta = getProductMeta(product);
                   return (
-                    <li className="sd-product-row" key={product.id}>
-                      <img
-                        className="sd-product-row__thumb"
-                        src={resolveProductImage(product, "120x120")}
-                        alt=""
-                      />
-                      <div className="sd-product-row__info">
-                        <p className="sd-product-row__name">{product.name}</p>
-                        <p className="sd-product-row__meta">{meta.category}</p>
-                      </div>
-                      <span className={`sd-stock sd-stock--${meta.stockTone}`}>
-                        {meta.stockLabel}
-                      </span>
-                      <span className="sd-product-row__price">${Number(product.price || 0).toFixed(2)}</span>
+                    <li key={product.id}>
+                      <button
+                        type="button"
+                        className="sd-product-row"
+                        onClick={() =>
+                          navigate("/products", { state: { viewProductId: product.id } })
+                        }
+                        aria-label={`View ${product.name}`}
+                      >
+                        <img
+                          className="sd-product-row__thumb"
+                          src={resolveProductImage(product, "120x120")}
+                          alt=""
+                        />
+                        <div className="sd-product-row__info">
+                          <p className="sd-product-row__name">{product.name}</p>
+                          <p className="sd-product-row__meta">{meta.category}</p>
+                        </div>
+                        <span className={`sd-stock sd-stock--${meta.stockTone}`}>
+                          {meta.stockLabel}
+                        </span>
+                        <span className="sd-product-row__price">
+                          ${Number(product.price || 0).toFixed(2)}
+                        </span>
+                      </button>
                     </li>
                   );
                 })}

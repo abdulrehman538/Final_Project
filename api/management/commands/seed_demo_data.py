@@ -1,15 +1,13 @@
-import shutil
 from decimal import Decimal
 from pathlib import Path
 
 from django.conf import settings
 from django.contrib.auth.models import Group, User
-from django.core.files import File
 from django.core.management.base import BaseCommand
 from django.utils import timezone
 
+from api.demo_product_images import assign_image_to_product, ensure_demo_images
 from api.models import Order, OrderItem, Product, UserProfile
-
 
 DEMO_USERNAMES = [
     "techvault",
@@ -34,7 +32,7 @@ DEMO_STORES = [
                 "price": "129.99",
                 "stock": 18,
                 "category": "Electronics",
-                "image": "pexels-cmonphotography-1809644.jpg",
+                "image": "demo_headphones.jpg",
             },
             {
                 "name": "Mechanical Keyboard RGB",
@@ -42,7 +40,7 @@ DEMO_STORES = [
                 "price": "89.50",
                 "stock": 12,
                 "category": "Electronics",
-                "image": "gm1.jpg",
+                "image": "demo_keyboard.jpg",
             },
             {
                 "name": "USB-C Fast Charging Hub",
@@ -50,7 +48,7 @@ DEMO_STORES = [
                 "price": "54.00",
                 "stock": 25,
                 "category": "Electronics",
-                "image": "bbcc9dd12f8853ddd37922e1003d913d.jpg",
+                "image": "demo_usb_hub.jpg",
             },
             {
                 "name": "Portable Bluetooth Speaker",
@@ -58,7 +56,7 @@ DEMO_STORES = [
                 "price": "39.99",
                 "stock": 4,
                 "category": "Electronics",
-                "image": "071341d0aeb9a301ca53f2814abd5105.jpg",
+                "image": "demo_speaker.jpg",
             },
         ],
     },
@@ -76,7 +74,7 @@ DEMO_STORES = [
                 "price": "42.00",
                 "stock": 15,
                 "category": "Home & Kitchen",
-                "image": "gm2.jfif",
+                "image": "demo_coffee_set.jpg",
             },
             {
                 "name": "Linen Throw Blanket",
@@ -84,7 +82,7 @@ DEMO_STORES = [
                 "price": "68.00",
                 "stock": 9,
                 "category": "Home & Kitchen",
-                "image": "s.jpg",
+                "image": "demo_blanket.jpg",
             },
             {
                 "name": "Bamboo Cutting Board Set",
@@ -92,7 +90,7 @@ DEMO_STORES = [
                 "price": "34.50",
                 "stock": 22,
                 "category": "Home & Kitchen",
-                "image": "gm1.jpg",
+                "image": "demo_cutting_board.jpg",
             },
         ],
     },
@@ -110,7 +108,7 @@ DEMO_STORES = [
                 "price": "79.00",
                 "stock": 14,
                 "category": "Fashion",
-                "image": "s.jpg",
+                "image": "demo_sneakers.jpg",
             },
             {
                 "name": "Canvas Weekender Bag",
@@ -118,7 +116,7 @@ DEMO_STORES = [
                 "price": "56.00",
                 "stock": 11,
                 "category": "Fashion",
-                "image": "bbcc9dd12f8853ddd37922e1003d913d.jpg",
+                "image": "demo_weekender_bag.jpg",
             },
             {
                 "name": "Polarized Sunglasses",
@@ -126,7 +124,7 @@ DEMO_STORES = [
                 "price": "29.00",
                 "stock": 3,
                 "category": "Fashion",
-                "image": "pexels-cmonphotography-1809644.jpg",
+                "image": "demo_sunglasses.jpg",
             },
         ],
     },
@@ -144,7 +142,7 @@ DEMO_STORES = [
                 "price": "24.99",
                 "stock": 30,
                 "category": "Groceries",
-                "image": "071341d0aeb9a301ca53f2814abd5105.jpg",
+                "image": "demo_vegetable_box.jpg",
             },
             {
                 "name": "Artisan Sourdough Loaf",
@@ -152,7 +150,7 @@ DEMO_STORES = [
                 "price": "6.50",
                 "stock": 20,
                 "category": "Groceries",
-                "image": "gm2.jfif",
+                "image": "demo_sourdough.jpg",
             },
             {
                 "name": "Cold-Pressed Olive Oil",
@@ -160,7 +158,7 @@ DEMO_STORES = [
                 "price": "18.00",
                 "stock": 16,
                 "category": "Groceries",
-                "image": "gm1.jpg",
+                "image": "demo_olive_oil.jpg",
             },
         ],
     },
@@ -191,7 +189,7 @@ class Command(BaseCommand):
             self._reset_demo_data()
 
         media_products = Path(settings.MEDIA_ROOT) / "products"
-        media_products.mkdir(parents=True, exist_ok=True)
+        ensure_demo_images(media_products, stdout=self.stdout)
 
         seller_group, _ = Group.objects.get_or_create(name="Seller")
         created_products = 0
@@ -241,15 +239,7 @@ class Command(BaseCommand):
                         product.store_name = store["store_name"]
                         product.save()
 
-                    source_image = media_products / item["image"]
-                    if source_image.exists():
-                        seed_name = f"seed_{store['username']}_{item['image']}"
-                        seed_path = media_products / seed_name
-                        if not seed_path.exists():
-                            shutil.copy2(source_image, seed_path)
-                        with seed_path.open("rb") as image_file:
-                            product.image.save(seed_name, File(image_file), save=True)
-
+                    assign_image_to_product(product, media_products)
                     created_products += 1
 
         self._seed_sample_orders()

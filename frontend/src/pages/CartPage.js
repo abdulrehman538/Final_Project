@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { getProductMeta, resolveProductImage } from "../utils/productImage";
 import { fetchWithAuth, getAccessToken } from "../utils/authSession";
+import ModalCloseButton from "../components/ModalCloseButton";
 import "./CartPage.css";
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
@@ -537,9 +538,7 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
       {showModal && (
         <div className="ct-modal-overlay">
           <div className="ct-checkout-modal">
-            <button type="button" className="ct-modal-close" onClick={() => setShowModal(false)} aria-label="Close">
-              ×
-            </button>
+            <ModalCloseButton onClick={() => setShowModal(false)} />
 
             {orderSuccess ? (
               <div className="ct-success">
