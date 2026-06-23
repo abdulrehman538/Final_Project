@@ -1,12 +1,12 @@
 from datetime import timedelta
 
 from django.test import TestCase
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, Group
 from django.conf import settings
 from rest_framework.test import APIClient
 from rest_framework import status
 
-from .models import UserProfile, Order, Product
+from .models import UserProfile, Order, Product, Cart, CartItem
 
 
 class SellerApprovalWorkflowTests(TestCase):
@@ -20,7 +20,7 @@ class SellerApprovalWorkflowTests(TestCase):
         response = self.client.patch('/api/profile/', {
             'store_name': 'Pending Store',
             'business_description': 'Test business',
-            'contact_phone': '123456789',
+            'contact_phone': '03001234567',
             'terms_accepted': True,
         }, format='json')
 
@@ -35,7 +35,7 @@ class SellerApprovalWorkflowTests(TestCase):
         self.client.patch('/api/profile/', {
             'store_name': 'Pending Store',
             'business_description': 'Test business',
-            'contact_phone': '123456789',
+            'contact_phone': '03001234567',
             'terms_accepted': True,
         }, format='json')
 
@@ -52,7 +52,7 @@ class SellerApprovalWorkflowTests(TestCase):
         self.client.patch('/api/profile/', {
             'store_name': 'Pending Store',
             'business_description': 'Test business',
-            'contact_phone': '123456789',
+            'contact_phone': '03001234567',
             'terms_accepted': True,
         }, format='json')
 
@@ -76,11 +76,11 @@ class SellerApprovalWorkflowTests(TestCase):
             'username': 'newseller',
             'password': 'sellerpass123',
             'email': 'seller@example.com',
-            'phone': '5551234567',
+            'phone': '03001234567',
             'address': '{"address1":"1 Main St"}',
             'store_name': 'New Seller Store',
             'business_description': 'We sell quality goods.',
-            'contact_phone': '5551234567',
+            'contact_phone': '03001234567',
             'terms_accepted': True,
             'apply_as_seller': True,
         }, format='json')
@@ -112,7 +112,7 @@ class SellerApprovalWorkflowTests(TestCase):
         response = self.client.post('/api/checkout/', {
             'items': [{'product_id': product.id, 'quantity': 1}],
             'customer_name': 'Guest Shopper',
-            'customer_phone': '5551234',
+            'customer_phone': '03001234567',
             'customer_email': 'guest@example.com',
             'shipping_address': '{"address1":"123 Main St","postal_code":"44000"}',
         }, format='json')
@@ -138,6 +138,8 @@ class SellerApprovalWorkflowTests(TestCase):
         response = self.client.post('/api/checkout/', {
             'items': [{'product_id': product.id, 'quantity': 1}],
             'customer_name': 'Guest Shopper',
+            'customer_phone': '03001234567',
+            'customer_email': 'guest@example.com',
             'shipping_address': '123 Guest Street',
         }, format='json')
 
@@ -168,6 +170,8 @@ class SellerApprovalWorkflowTests(TestCase):
         first = self.client.post('/api/checkout/', {
             'items': [{'product_id': product.id, 'quantity': 5}],
             'customer_name': 'Buyer One',
+            'customer_phone': '03001234567',
+            'customer_email': 'buyer1@example.com',
             'shipping_address': '123 Main St',
         }, format='json')
         self.assertEqual(first.status_code, status.HTTP_201_CREATED)
@@ -178,6 +182,8 @@ class SellerApprovalWorkflowTests(TestCase):
         second = self.client.post('/api/checkout/', {
             'items': [{'product_id': product.id, 'quantity': 7}],
             'customer_name': 'Buyer Two',
+            'customer_phone': '03009876543',
+            'customer_email': 'buyer2@example.com',
             'shipping_address': '456 Main St',
         }, format='json')
         self.assertEqual(second.status_code, status.HTTP_400_BAD_REQUEST)
@@ -185,6 +191,150 @@ class SellerApprovalWorkflowTests(TestCase):
 
         product.refresh_from_db()
         self.assertEqual(product.stock, 5)
+
+    def test_authenticated_checkout_clears_server_cart(self):
+        product = Product.objects.create(
+            name='Server Cart Item',
+            description='Test',
+            price='20.00',
+            stock=8,
+            category='General',
+            store_name='Test Store',
+        )
+
+        self.client.force_authenticate(user=self.shopper)
+        add_to_cart = self.client.post('/api/cart/', {
+            'product_id': product.id,
+            'quantity': 2,
+        }, format='json')
+        self.assertEqual(add_to_cart.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(add_to_cart.data['items']), 1)
+
+        checkout = self.client.post('/api/checkout/', {
+            'items': [{'product_id': product.id, 'quantity': 2}],
+            'customer_name': 'Logged In Buyer',
+            'customer_phone': '03001234567',
+            'customer_email': 'shopper@example.com',
+            'shipping_address': '123 Main St',
+        }, format='json')
+        self.assertEqual(checkout.status_code, status.HTTP_201_CREATED)
+
+        product.refresh_from_db()
+        self.assertEqual(product.stock, 6)
+
+        cart = Cart.objects.get(user=self.shopper)
+        self.assertEqual(cart.items.count(), 0)
+
+        cart_response = self.client.get('/api/cart/')
+        self.assertEqual(cart_response.status_code, status.HTTP_200_OK)
+        self.assertEqual(cart_response.data['items'], [])
+
+    def test_seller_orders_only_include_their_items(self):
+        seller_a = User.objects.create_user(username='musa', password='sellerpass')
+        seller_b = User.objects.create_user(username='deckard', password='sellerpass')
+
+        UserProfile.objects.create(
+            user=seller_a,
+            is_seller=True,
+            seller_status='approved',
+            store_name='Musa Store',
+        )
+        UserProfile.objects.create(
+            user=seller_b,
+            is_seller=True,
+            seller_status='approved',
+            store_name='Deckard Store',
+        )
+
+        product_a = Product.objects.create(
+            owner=seller_a,
+            name='Musa Product',
+            description='From Musa',
+            price='20.00',
+            stock=5,
+            category='General',
+            store_name='Musa Store',
+        )
+        product_b = Product.objects.create(
+            owner=seller_b,
+            name='Deckard Product',
+            description='From Deckard',
+            price='30.00',
+            stock=5,
+            category='General',
+            store_name='Deckard Store',
+        )
+
+        checkout = self.client.post('/api/checkout/', {
+            'items': [
+                {'product_id': product_a.id, 'quantity': 1},
+                {'product_id': product_b.id, 'quantity': 1},
+            ],
+            'customer_name': 'Multi Store Buyer',
+            'customer_phone': '03001234567',
+            'customer_email': 'multi@example.com',
+            'shipping_address': '123 Mixed Store Street',
+        }, format='json')
+        self.assertEqual(checkout.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(len(checkout.data['items']), 2)
+
+        self.client.force_authenticate(user=seller_a)
+        musa_orders = self.client.get('/api/seller-orders/')
+        self.assertEqual(musa_orders.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(musa_orders.data), 1)
+        self.assertEqual(len(musa_orders.data[0]['items']), 1)
+        self.assertEqual(musa_orders.data[0]['items'][0]['product_name'], 'Musa Product')
+        self.assertEqual(str(musa_orders.data[0]['seller_subtotal']), '20.00')
+        self.assertNotIn('total_price', musa_orders.data[0])
+
+        self.client.force_authenticate(user=seller_b)
+        deckard_orders = self.client.get('/api/seller-orders/')
+        self.assertEqual(deckard_orders.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(deckard_orders.data), 1)
+        self.assertEqual(len(deckard_orders.data[0]['items']), 1)
+        self.assertEqual(deckard_orders.data[0]['items'][0]['product_name'], 'Deckard Product')
+        self.assertEqual(str(deckard_orders.data[0]['seller_subtotal']), '30.00')
+
+        self.client.force_authenticate(user=self.shopper)
+        buyer_orders = self.client.get('/api/orders/')
+        self.assertEqual(buyer_orders.status_code, status.HTTP_200_OK)
+
+    def test_order_track_returns_status_only(self):
+        product = Product.objects.create(
+            name='Track Me Item',
+            description='Test',
+            price='18.00',
+            stock=4,
+            category='General',
+            store_name='Track Store',
+        )
+
+        checkout = self.client.post('/api/checkout/', {
+            'items': [{'product_id': product.id, 'quantity': 1}],
+            'customer_name': 'Tracker Buyer',
+            'customer_phone': '03001234567',
+            'customer_email': 'track@example.com',
+            'shipping_address': '123 Track Street',
+        }, format='json')
+        self.assertEqual(checkout.status_code, status.HTTP_201_CREATED)
+        order_id = checkout.data['id']
+
+        track = self.client.post('/api/orders/track/', {'order_id': order_id}, format='json')
+        self.assertEqual(track.status_code, status.HTTP_200_OK)
+        self.assertEqual(track.data['id'], order_id)
+        self.assertEqual(track.data['status'], 'pending')
+        self.assertEqual(track.data['status_label'], 'Pending')
+        self.assertIn('created_at', track.data)
+        self.assertIn('updated_at', track.data)
+        self.assertNotIn('customer_name', track.data)
+        self.assertNotIn('items', track.data)
+
+        missing = self.client.post('/api/orders/track/', {'order_id': 999999}, format='json')
+        self.assertEqual(missing.status_code, status.HTTP_404_NOT_FOUND)
+
+        hash_track = self.client.get(f'/api/orders/track/?order=%23{order_id}')
+        self.assertEqual(hash_track.status_code, status.HTTP_200_OK)
+        self.assertEqual(hash_track.data['status'], 'pending')
 
     def test_cancelled_order_restores_product_stock(self):
         seller = User.objects.create_user(username='seller1', password='sellerpass')
@@ -208,6 +358,8 @@ class SellerApprovalWorkflowTests(TestCase):
         checkout = self.client.post('/api/checkout/', {
             'items': [{'product_id': product.id, 'quantity': 4}],
             'customer_name': 'Buyer Three',
+            'customer_phone': '03001112233',
+            'customer_email': 'buyer3@example.com',
             'shipping_address': '789 Main St',
         }, format='json')
         self.assertEqual(checkout.status_code, status.HTTP_201_CREATED)
@@ -266,3 +418,56 @@ class SellerApprovalWorkflowTests(TestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertTrue(any(item['name'] == 'Wireless Mouse' for item in response.data))
+
+
+class SellerDashboardStatsTests(TestCase):
+    def setUp(self):
+        self.client = APIClient()
+        self.seller = User.objects.create_user(username='statseller', password='sellerpass')
+        self.shopper = User.objects.create_user(username='statbuyer', password='buyerpass')
+        UserProfile.objects.create(
+            user=self.seller,
+            is_seller=True,
+            seller_status='approved',
+            store_name='Stats Store',
+        )
+        Group.objects.get_or_create(name='Seller')[0].user_set.add(self.seller)
+
+        self.product = Product.objects.create(
+            owner=self.seller,
+            name='Stats Product',
+            description='Test',
+            price='20.00',
+            stock=8,
+            category='General',
+            store_name='Stats Store',
+        )
+
+    def test_seller_stats_requires_approved_seller(self):
+        self.client.force_authenticate(user=self.shopper)
+        response = self.client.get('/api/seller/stats/')
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_seller_stats_returns_store_metrics(self):
+        checkout = self.client.post('/api/checkout/', {
+            'items': [{'product_id': self.product.id, 'quantity': 2}],
+            'customer_name': 'Buyer',
+            'customer_phone': '03001234567',
+            'customer_email': 'buyer@example.com',
+            'shipping_address': '123 Main St',
+        }, format='json')
+        self.assertEqual(checkout.status_code, status.HTTP_201_CREATED)
+
+        self.client.force_authenticate(user=self.seller)
+        response = self.client.get('/api/seller/stats/')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['store_name'], 'Stats Store')
+        self.assertEqual(response.data['products_count'], 1)
+        self.assertEqual(response.data['orders_count'], 1)
+        self.assertEqual(response.data['pending_orders_count'], 1)
+        self.assertEqual(response.data['revenue_total'], '40.00')
+        self.assertEqual(len(response.data['order_volume']), 7)
+        self.assertEqual(len(response.data['top_products']), 1)
+        self.assertEqual(response.data['top_products'][0]['units_sold'], 2)
+

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { getProductMeta, resolveProductImage } from "../utils/productImage";
+import { COLLECTION_POINT_FEE, formatPrice, SHIPPING_FEE } from "../utils/currency";
 import "./ProductDetail.css";
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
@@ -10,19 +11,6 @@ const TRUST_ITEMS = [
   { icon: "🛡️", title: "Secure checkout", text: "COD available" },
   { icon: "↩️", title: "Easy returns", text: "14-day policy" },
 ];
-
-function formatCommentDate(value) {
-  if (!value) return "";
-  try {
-    return new Date(value).toLocaleDateString(undefined, {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  } catch {
-    return "";
-  }
-}
 
 function buildGalleryImages(product) {
   const images = [];
@@ -59,12 +47,8 @@ function ProductDetail({ cart = [], onAddToCart, onToggleWishlist, wishlist = []
   const navigate = useNavigate();
   const location = useLocation();
   const token = localStorage.getItem("accessToken");
-  const username = localStorage.getItem("username") || "Guest";
   const [product, setProduct] = useState(location.state?.product || null);
   const [relatedProducts, setRelatedProducts] = useState([]);
-  const [comments, setComments] = useState([]);
-  const [commentBody, setCommentBody] = useState("");
-  const [commentLoading, setCommentLoading] = useState(false);
   const [qty, setQty] = useState(1);
   const [activeImage, setActiveImage] = useState(0);
   const [justAdded, setJustAdded] = useState(false);
@@ -124,30 +108,6 @@ function ProductDetail({ cart = [], onAddToCart, onToggleWishlist, wishlist = []
   }, [id]);
 
   useEffect(() => {
-    const loadComments = async () => {
-      setCommentLoading(true);
-
-      try {
-        const response = await fetch(`${API_BASE}/api/products/${id}/comments/`);
-
-        if (!response.ok) {
-          throw new Error("No comments available");
-        }
-
-        const data = await response.json();
-        setComments(Array.isArray(data) ? data : []);
-      } catch {
-        const fallback = JSON.parse(localStorage.getItem(`comments-${id}`) || "[]");
-        setComments(fallback);
-      } finally {
-        setCommentLoading(false);
-      }
-    };
-
-    loadComments();
-  }, [id]);
-
-  useEffect(() => {
     setActiveImage(0);
     setQty(1);
   }, [product?.id]);
@@ -159,45 +119,6 @@ function ProductDetail({ cart = [], onAddToCart, onToggleWishlist, wishlist = []
   const heroImage = galleryImages[activeImage] || resolveProductImage(product, "900x900");
   const outOfStock = (product?.stock ?? 0) <= 0;
   const canBuyNow = isInCart && !outOfStock;
-
-  const handleCommentSubmit = async (event) => {
-    event.preventDefault();
-    if (!commentBody.trim()) return;
-
-    try {
-      if (token) {
-        const response = await fetch(`${API_BASE}/api/products/${id}/comments/`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: `Bearer ${token}`,
-          },
-          body: JSON.stringify({ body: commentBody }),
-        });
-
-        if (response.ok) {
-          const created = await response.json();
-          setComments((current) => [...current, created]);
-          localStorage.setItem(`comments-${id}`, JSON.stringify([...comments, created]));
-          setCommentBody("");
-          return;
-        }
-      }
-
-      throw new Error("Post comment locally");
-    } catch {
-      const offlineComment = {
-        id: Date.now(),
-        username,
-        body: commentBody,
-        created_at: new Date().toISOString(),
-      };
-      const nextComments = [...comments, offlineComment];
-      setComments(nextComments);
-      localStorage.setItem(`comments-${id}`, JSON.stringify(nextComments));
-      setCommentBody("");
-    }
-  };
 
   const handleAddToCart = () => {
     if (outOfStock) return;
@@ -274,8 +195,6 @@ function ProductDetail({ cart = [], onAddToCart, onToggleWishlist, wishlist = []
                 <span className="pd-info__store">{meta.store}</span>
                 <span className="pd-info__dot" aria-hidden="true">·</span>
                 <span className="pd-info__rating">★ {meta.rating}</span>
-                <span className="pd-info__dot" aria-hidden="true">·</span>
-                <span className="pd-info__reviews">{comments.length || 0} reviews</span>
               </div>
             </div>
 
@@ -291,7 +210,7 @@ function ProductDetail({ cart = [], onAddToCart, onToggleWishlist, wishlist = []
 
           <div className="pd-price-row">
             <div className="pd-price-block">
-              <p className="pd-price">${Number(product.price || 0).toFixed(2)}</p>
+              <p className="pd-price">{formatPrice(product.price)}</p>
               <p className="pd-price-note">
                 {meta.stock <= 5 && meta.stock > 0
                   ? "Almost sold out"
@@ -316,7 +235,7 @@ function ProductDetail({ cart = [], onAddToCart, onToggleWishlist, wishlist = []
           </div>
 
           <p className="pd-description">
-            {product.description || "A quality pick from our marketplace — browse details, read reviews, and checkout as a guest without creating an account."}
+            {product.description || "A quality pick from our marketplace — browse details and checkout as a guest without creating an account."}
           </p>
 
           <div className="pd-buy-row">
@@ -377,11 +296,11 @@ function ProductDetail({ cart = [], onAddToCart, onToggleWishlist, wishlist = []
               <p className="pd-panel__title">Delivery options</p>
               <div className="pd-panel__row">
                 <span>Standard delivery</span>
-                <strong>Rs. 145</strong>
+                <strong>{formatPrice(SHIPPING_FEE)}</strong>
               </div>
               <div className="pd-panel__row">
                 <span>Collection point</span>
-                <strong>Rs. 35</strong>
+                <strong>{formatPrice(COLLECTION_POINT_FEE)}</strong>
               </div>
               <div className="pd-panel__row">
                 <span>Cash on delivery</span>
@@ -412,46 +331,6 @@ function ProductDetail({ cart = [], onAddToCart, onToggleWishlist, wishlist = []
         ))}
       </div>
 
-      <section className="pd-reviews">
-        <div className="pd-section-head">
-          <div>
-            <p className="pd-info__eyebrow">Reviews</p>
-            <h3>Customer reviews</h3>
-          </div>
-        </div>
-
-        <form className="pd-comment-form" onSubmit={handleCommentSubmit}>
-          <textarea
-            className="field-input"
-            rows="3"
-            placeholder="Share your experience with this product..."
-            value={commentBody}
-            onChange={(event) => setCommentBody(event.target.value)}
-          />
-          <button type="submit" className="btn btn-primary">
-            Post review
-          </button>
-        </form>
-
-        {commentLoading ? (
-          <div className="pd-empty">Loading reviews...</div>
-        ) : comments.length === 0 ? (
-          <div className="pd-empty">No reviews yet. Be the first to share your thoughts.</div>
-        ) : (
-          <div className="pd-comment-list">
-            {comments.map((comment) => (
-              <article className="pd-comment" key={comment.id || `${comment.username}-${comment.created_at}`}>
-                <div className="pd-comment__head">
-                  <span className="pd-comment__author">{comment.username || username}</span>
-                  <span className="pd-comment__date">{formatCommentDate(comment.created_at)}</span>
-                </div>
-                <p>{comment.body}</p>
-              </article>
-            ))}
-          </div>
-        )}
-      </section>
-
       {relatedProducts.length > 0 && (
         <section className="pd-related">
           <div className="pd-section-head">
@@ -477,7 +356,7 @@ function ProductDetail({ cart = [], onAddToCart, onToggleWishlist, wishlist = []
                   <div className="pd-related__body">
                     <span className="pd-related__store">{itemMeta.store}</span>
                     <p className="pd-related__title">{item.name}</p>
-                    <p className="pd-related__price">${Number(item.price || 0).toFixed(2)}</p>
+                    <p className="pd-related__price">{formatPrice(item.price)}</p>
                   </div>
                 </button>
               );

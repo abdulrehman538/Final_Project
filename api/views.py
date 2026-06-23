@@ -1,9 +1,10 @@
 from rest_framework import generics, parsers, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import IsAuthenticated, AllowAny, SAFE_METHODS
 from rest_framework.response import Response
 from django.contrib.auth.models import User, Group
 from django.db import transaction
-from django.db.models import Count, Q, Sum
+from django.db.models import Count, F, Q, Sum
 from django.utils import timezone
 from datetime import timedelta
 from decimal import Decimal
@@ -21,6 +22,7 @@ from .models import (
 )
 
 from .stock import aggregate_cart_quantities, deduct_product_stock, restore_order_stock
+from .validators import clean_email, clean_pk_phone
 from .serializers import (
     ProductSerializer,
     UserRegisterSerializer,
@@ -30,6 +32,8 @@ from .serializers import (
     AdminLowStockProductSerializer,
     ProductCommentSerializer,
     OrderSerializer,
+    SellerOrderSerializer,
+    OrderTrackSerializer,
     ProductImageSerializer,
     CartSerializer,
 )
@@ -388,7 +392,11 @@ class OrderStatusUpdateView(generics.GenericAPIView):
             locked_order.save(update_fields=["status", "updated_at"])
             order = locked_order
 
-        return Response(self.get_serializer(order).data)
+        serializer_class = OrderSerializer
+        if is_seller(request.user) and not is_admin(request.user):
+            serializer_class = SellerOrderSerializer
+
+        return Response(serializer_class(order, context={"request": request}).data)
 
 
 class OrderDeliveryConfirmationView(generics.GenericAPIView):
@@ -649,6 +657,19 @@ class CheckoutView(generics.GenericAPIView):
                     {'detail': 'Shipping address is required for guest checkout.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            try:
+                customer_phone = clean_pk_phone(customer_phone, required=True)
+                customer_email = clean_email(customer_email, required=True)
+            except ValidationError as exc:
+                detail = exc.detail
+                if isinstance(detail, list):
+                    detail = detail[0]
+                if isinstance(detail, dict):
+                    return Response(detail, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"detail": str(detail)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
         try:
             with transaction.atomic():
@@ -744,6 +765,74 @@ class CheckoutView(generics.GenericAPIView):
             )
 
 
+class OrderTrackView(generics.GenericAPIView):
+    """
+    Public order lookup by order number.
+    Returns status metadata only — no customer or line-item details.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
+    serializer_class = OrderTrackSerializer
+
+    def _parse_order_id(self, value):
+        if value is None or value == "":
+            return None
+
+        cleaned = str(value).strip().lstrip("#")
+        try:
+            return int(cleaned)
+        except (TypeError, ValueError):
+            return None
+
+    def _lookup(self, order_id):
+        if not order_id:
+            return None
+        return Order.objects.filter(pk=order_id).only(
+            "id",
+            "status",
+            "created_at",
+            "updated_at",
+        ).first()
+
+    def get(self, request):
+        order_id = self._parse_order_id(
+            request.query_params.get("order_id") or request.query_params.get("order")
+        )
+        if not order_id:
+            return Response(
+                {"detail": "Order number is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order = self._lookup(order_id)
+        if not order:
+            return Response(
+                {"detail": "Order not found. Check the order number and try again."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(self.get_serializer(order).data)
+
+    def post(self, request):
+        order_id = self._parse_order_id(
+            request.data.get("order_id") or request.data.get("order")
+        )
+        if not order_id:
+            return Response(
+                {"detail": "Order number is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order = self._lookup(order_id)
+        if not order:
+            return Response(
+                {"detail": "Order not found. Check the order number and try again."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(self.get_serializer(order).data)
+
+
 class OrderListView(generics.ListAPIView):
     """Get all orders placed by the authenticated user."""
     serializer_class = OrderSerializer
@@ -755,7 +844,7 @@ class OrderListView(generics.ListAPIView):
 
 class SellerOrdersView(generics.ListAPIView):
     """Get all orders containing items sold by the authenticated seller"""
-    serializer_class = OrderSerializer
+    serializer_class = SellerOrderSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
@@ -766,7 +855,10 @@ class SellerOrdersView(generics.ListAPIView):
         # Get all orders that contain items sold by this seller
         return Order.objects.filter(
             items__seller=self.request.user
-        ).distinct().select_related("buyer").prefetch_related("items").order_by("-created_at")
+        ).distinct().select_related("buyer").prefetch_related(
+            "items__product",
+            "items__seller",
+        ).order_by("-created_at")
 
 
 class SellerProductsView(generics.ListAPIView):
@@ -780,3 +872,115 @@ class SellerProductsView(generics.ListAPIView):
             return Product.objects.none()
 
         return Product.objects.filter(owner=self.request.user).select_related("owner")
+
+
+class SellerDashboardStatsView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_seller(request.user):
+            return Response(
+                {"detail": "Only sellers can access dashboard stats."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        seller = request.user
+        profile = getattr(seller, "profile", None)
+        store_name = (getattr(profile, "store_name", "") or seller.username).strip()
+
+        seller_products = Product.objects.filter(owner=seller)
+        products_count = seller_products.count()
+        total_stock = seller_products.aggregate(total=Sum("stock"))["total"] or 0
+        inventory_value = seller_products.aggregate(
+            total=Sum(F("price") * F("stock"))
+        )["total"] or Decimal("0")
+
+        line_total = F("price") * F("quantity")
+        sold_items = OrderItem.objects.filter(seller=seller).exclude(order__status="cancelled")
+
+        revenue_total = sold_items.aggregate(total=Sum(line_total))["total"] or Decimal("0")
+
+        seller_orders = Order.objects.filter(items__seller=seller).distinct()
+        orders_count = seller_orders.count()
+        pending_orders_count = seller_orders.filter(status="pending").count()
+        active_orders_count = seller_orders.filter(
+            status__in=["confirmed", "shipped", "delivered"]
+        ).count()
+        completed_orders_count = seller_orders.filter(status="completed").count()
+        cancelled_orders_count = seller_orders.filter(status="cancelled").count()
+
+        today = timezone.now().date()
+        order_volume = []
+        max_day_total = Decimal("0")
+
+        for offset in range(6, -1, -1):
+            day = today - timedelta(days=offset)
+            day_items = sold_items.filter(order__created_at__date=day)
+            day_total = day_items.aggregate(total=Sum(line_total))["total"] or Decimal("0")
+            if day_total > max_day_total:
+                max_day_total = day_total
+            order_volume.append({
+                "date": day.isoformat(),
+                "label": day.strftime("%a"),
+                "total": float(day_total),
+                "orders": day_items.values("order_id").distinct().count(),
+            })
+
+        status_breakdown = [
+            {
+                "status": status_key,
+                "label": label,
+                "count": seller_orders.filter(status=status_key).count(),
+            }
+            for status_key, label in Order.STATUS_CHOICES
+        ]
+        status_max = max((entry["count"] for entry in status_breakdown), default=0)
+
+        low_stock_products = seller_products.filter(stock__gt=0, stock__lte=5).order_by("stock", "name")[:8]
+        out_of_stock_products = seller_products.filter(stock=0).order_by("name")[:8]
+
+        top_products_qs = (
+            sold_items.values("product_id", "product__name")
+            .annotate(
+                units_sold=Sum("quantity"),
+                revenue=Sum(line_total),
+            )
+            .order_by("-units_sold")[:5]
+        )
+        top_products = [
+            {
+                "product_id": row["product_id"],
+                "name": row["product__name"] or "Unknown product",
+                "units_sold": row["units_sold"] or 0,
+                "revenue": str(row["revenue"] or Decimal("0")),
+            }
+            for row in top_products_qs
+        ]
+
+        return Response({
+            "store_name": store_name,
+            "products_count": products_count,
+            "total_stock": total_stock,
+            "inventory_value": str(inventory_value),
+            "revenue_total": str(revenue_total),
+            "orders_count": orders_count,
+            "pending_orders_count": pending_orders_count,
+            "active_orders_count": active_orders_count,
+            "completed_orders_count": completed_orders_count,
+            "cancelled_orders_count": cancelled_orders_count,
+            "low_stock_count": seller_products.filter(stock__gt=0, stock__lte=5).count(),
+            "out_of_stock_count": seller_products.filter(stock=0).count(),
+            "order_volume": order_volume,
+            "order_volume_max": float(max_day_total) if max_day_total > 0 else 1,
+            "status_breakdown": status_breakdown,
+            "status_breakdown_max": status_max if status_max > 0 else 1,
+            "low_stock_products": AdminLowStockProductSerializer(
+                low_stock_products,
+                many=True,
+            ).data,
+            "out_of_stock_products": AdminLowStockProductSerializer(
+                out_of_stock_products,
+                many=True,
+            ).data,
+            "top_products": top_products,
+        })

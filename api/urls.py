@@ -7,7 +7,8 @@ from .views import (ProductListCreateView, ProductDetailView,
                      RejectSellerRequestView, AdminOrdersView, AdminDashboardStatsView,
                      AdminStoresListView, AdminStoreDetailView, OrderStatusUpdateView,
                      OrderDeliveryConfirmationView, ProductSearchView, CartView,
-                     AdminBanStoreView, AdminUnbanStoreView)
+                     OrderTrackView,
+                     AdminBanStoreView, AdminUnbanStoreView, SellerDashboardStatsView)
 
 urlpatterns = [
     path('products/', ProductListCreateView.as_view()),
@@ -21,11 +22,13 @@ urlpatterns = [
     path('profile/', ProfileView.as_view()),
     path('cart/', CartView.as_view()),
     path('checkout/', CheckoutView.as_view()),
+    path('orders/track/', OrderTrackView.as_view()),
     path('orders/', OrderListView.as_view()),
     path('orders/<int:pk>/status/', OrderStatusUpdateView.as_view()),
     path('orders/<int:pk>/confirm-delivery/', OrderDeliveryConfirmationView.as_view()),
     path('seller-orders/', SellerOrdersView.as_view()),
     path('seller-products/', SellerProductsView.as_view()),
+    path('seller/stats/', SellerDashboardStatsView.as_view()),
     path('admin/seller-requests/', SellerRequestListView.as_view()),
     path('admin/seller-requests/approve/', ApproveSellerRequestView.as_view()),
     path('admin/seller-requests/reject/', RejectSellerRequestView.as_view()),

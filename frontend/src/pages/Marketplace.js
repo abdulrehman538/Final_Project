@@ -128,9 +128,11 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [] }) {
 
     const filtered = enrichedProducts.filter((product) => {
       const productName = String(product?.name || "").toLowerCase();
+      const productDescription = String(product?.description || "").toLowerCase();
       const matchesQuery =
         !normalizedQuery ||
         productName.includes(normalizedQuery) ||
+        productDescription.includes(normalizedQuery) ||
         String(product.meta.store || "").toLowerCase().includes(normalizedQuery) ||
         String(product.meta.category || "").toLowerCase().includes(normalizedQuery);
       const matchesCategory =
@@ -247,6 +249,13 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [] }) {
               onClick={() => navigate("/portal")}
             >
               Become a Seller
+            </button>
+            <button
+              type="button"
+              className="mp-hero__cta mp-hero__cta--ghost"
+              onClick={() => navigate("/track-order")}
+            >
+              Track order
             </button>
           </div>
         </div>
@@ -372,13 +381,29 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [] }) {
 
       <section className="mp-catalog" id="catalog-section">
         <div className="mp-toolbar">
-          <p className="mp-toolbar__count">
-            {loading ? "Loading catalog…" : (
-              <>
-                {visibleProducts.length} <span>products</span>
-              </>
-            )}
-          </p>
+          <form
+            className="mp-toolbar__search"
+            onSubmit={(event) => event.preventDefault()}
+            role="search"
+          >
+            <input
+              id="catalog-search"
+              type="search"
+              placeholder="Search products, stores, or categories"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search catalog products"
+            />
+            {query.trim() ? (
+              <button
+                type="button"
+                className="mp-toolbar__clear"
+                onClick={() => setQuery("")}
+              >
+                Clear
+              </button>
+            ) : null}
+          </form>
 
           <div className="mp-toolbar__controls">
             <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sort products">
@@ -408,7 +433,11 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [] }) {
         ) : error && products.length === 0 ? (
           <div className="mp-empty">{error}</div>
         ) : visibleProducts.length === 0 ? (
-          <div className="mp-empty">No products match your search or filters.</div>
+          <div className="mp-empty">
+            {query.trim()
+              ? `No products found for "${query.trim()}". Try another search or clear filters.`
+              : "No products match your filters."}
+          </div>
         ) : (
           <div className="mp-grid">
             {visibleProducts.map((product) => {

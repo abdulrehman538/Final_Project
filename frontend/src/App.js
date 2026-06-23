@@ -24,6 +24,7 @@ import ProfilePage from "./pages/ProfilePage";
 import ProductCrud from "./ProductCrud";
 import AppLayout from "./components/AppLayout";
 import AboutUsPage from "./pages/Aboutus";
+import TrackOrderPage from "./pages/TrackOrderPage";
 import "./App.css";
 
 const loadJSON = (key, fallback) => {
@@ -281,10 +282,16 @@ function App() {
   };
 
   const clearCart = () => {
+    localStorage.setItem("cartItems", JSON.stringify([]));
     setCart([]);
 
     if (auth.token) {
-      void clearServerCart();
+      void clearServerCart().then((items) => {
+        if (Array.isArray(items)) {
+          localStorage.setItem("cartItems", JSON.stringify(items));
+          setCart(items);
+        }
+      });
     }
   };
 
@@ -564,6 +571,22 @@ function App() {
                 <ProfilePage onBecomeSeller={handleBecomeSeller} />
               </AppLayout>
             </ProtectedRoute>
+          }
+        />
+
+        <Route
+          path="/track-order"
+          element={
+            <AppLayout
+              role={auth.role}
+              isAuthenticated={isAuthenticated}
+              title="Track Order"
+              onLogout={handleLogout}
+              cartCount={cart.reduce((sum, item) => sum + item.quantity, 0)}
+              wishlistCount={wishlist.length}
+            >
+              <TrackOrderPage />
+            </AppLayout>
           }
         />
 

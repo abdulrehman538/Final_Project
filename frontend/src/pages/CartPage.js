@@ -2,11 +2,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { getProductMeta, resolveProductImage } from "../utils/productImage";
 import { fetchWithAuth, getAccessToken } from "../utils/authSession";
+import { normalizePhone, validateEmail, validatePhone } from "../utils/validation";
+import { getOrderStatusLabel } from "../utils/orderStatus";
+import { formatPrice, SHIPPING_FEE } from "../utils/currency";
 import ModalCloseButton from "../components/ModalCloseButton";
 import "./CartPage.css";
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
-const SHIPPING_FEE = 12.99;
 const TAX_RATE = 0.08;
 
 function CartSkeleton() {
@@ -23,6 +25,127 @@ function CartSkeleton() {
   );
 }
 
+function formatPlacedDate(value) {
+  if (!value) return "—";
+  try {
+    return new Date(value).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
+  } catch {
+    return "—";
+  }
+}
+
+function formatAddressPreview(address = {}) {
+  return [
+    address.address1,
+    address.address2,
+    address.address3,
+    address.postal_code,
+  ]
+    .filter(Boolean)
+    .join(", ");
+}
+
+function OrderConfirmationModal({ summary, onContinue, onTrack }) {
+  const [copied, setCopied] = useState(false);
+
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(String(summary.id));
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      window.prompt("Copy your order number:", String(summary.id));
+    }
+  };
+
+  return (
+    <div className="ct-modal-overlay ct-modal-overlay--confirm" role="dialog" aria-modal="true">
+      <div className="ct-order-confirm">
+        <div className="ct-order-confirm__hero">
+          <div className="ct-order-confirm__icon" aria-hidden="true">
+            ✓
+          </div>
+          <h2>Order placed successfully</h2>
+          <p>Thank you for your purchase. Save your order number below.</p>
+        </div>
+
+        <div className="ct-order-confirm__number-card">
+          <span className="ct-order-confirm__number-label">Your order number</span>
+          <div className="ct-order-confirm__number-row">
+            <strong className="ct-order-confirm__number">#{summary.id}</strong>
+            <button type="button" className="btn btn-secondary ct-order-confirm__copy" onClick={handleCopy}>
+              {copied ? "Copied" : "Copy"}
+            </button>
+          </div>
+          <p className="ct-order-confirm__number-hint">
+            Use this number on the Track order page to check delivery status.
+          </p>
+        </div>
+
+        <div className="ct-order-confirm__preview">
+          <div className="ct-order-confirm__preview-head">
+            <h3>Order preview</h3>
+            <span className="ct-order-confirm__status">{getOrderStatusLabel(summary.status)}</span>
+          </div>
+
+          <ul className="ct-order-confirm__items">
+            {summary.items.map((item, index) => {
+              const name = item.product_name || item.name || "Product";
+              const qty = Number(item.quantity) || 1;
+              const unitPrice = Number(item.price) || 0;
+              const lineTotal = unitPrice * qty;
+
+              return (
+                <li key={`${item.id || item.product || name}-${index}`}>
+                  <div className="ct-order-confirm__item-info">
+                    <strong>{name}</strong>
+                    {item.store_name ? <span>{item.store_name}</span> : null}
+                  </div>
+                  <div className="ct-order-confirm__item-qty">×{qty}</div>
+                  <div className="ct-order-confirm__item-price">${lineTotal.toFixed(2)}</div>
+                </li>
+              );
+            })}
+          </ul>
+
+          <div className="ct-order-confirm__summary">
+            <p><span>Subtotal</span><strong>${summary.subtotal.toFixed(2)}</strong></p>
+            <p><span>Shipping</span><strong>${summary.shipping.toFixed(2)}</strong></p>
+            <p><span>Tax</span><strong>${summary.tax.toFixed(2)}</strong></p>
+            <p className="ct-order-confirm__summary-total">
+              <span>Total (COD)</span>
+              <strong>${summary.total.toFixed(2)}</strong>
+            </p>
+          </div>
+
+          <div className="ct-order-confirm__meta">
+            <p><span>Customer</span><strong>{summary.customerName}</strong></p>
+            <p><span>Phone</span><strong>{summary.customerPhone}</strong></p>
+            <p><span>Deliver to</span><strong>{formatAddressPreview(summary.address) || "—"}</strong></p>
+            <p><span>Payment</span><strong>Cash on Delivery</strong></p>
+            <p><span>Placed on</span><strong>{formatPlacedDate(summary.placedAt)}</strong></p>
+          </div>
+        </div>
+
+        <div className="ct-order-confirm__actions">
+          <button type="button" className="btn btn-primary" onClick={onContinue}>
+            Continue shopping
+          </button>
+          <button type="button" className="btn btn-secondary" onClick={onTrack}>
+            Track this order
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onClearCart, onSyncCart }) {
   const location = useLocation();
   const navigate = useNavigate();
@@ -31,10 +154,13 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
   const [liveCart, setLiveCart] = useState([]);
   const [placingOrder, setPlacingOrder] = useState(false);
   const [orderSuccess, setOrderSuccess] = useState(false);
-  const [newOrderId, setNewOrderId] = useState("");
-  const [completedTotal, setCompletedTotal] = useState(0);
+  const [completedOrderSummary, setCompletedOrderSummary] = useState(null);
   const [checkoutPending, setCheckoutPending] = useState(false);
   const [showModal, setShowModal] = useState(false);
+  const [checkoutFieldErrors, setCheckoutFieldErrors] = useState({
+    phone: "",
+    email: "",
+  });
   const [customerFields, setCustomerFields] = useState({
     name: "",
     phone: "",
@@ -48,6 +174,7 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
     postal_code: "",
   });
   const onSyncCartRef = useRef(onSyncCart);
+  const hydrateRequestRef = useRef(0);
 
   useEffect(() => {
     onSyncCartRef.current = onSyncCart;
@@ -59,6 +186,8 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
   };
 
   const hydrateCart = useCallback(async () => {
+    const requestId = ++hydrateRequestRef.current;
+
     if (!cart.length) {
       setLiveCart([]);
       setError("");
@@ -71,11 +200,19 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
 
     try {
       const response = await fetch(`${API_BASE}/api/products/`);
+      if (requestId !== hydrateRequestRef.current) {
+        return;
+      }
+
       if (!response.ok) {
         throw new Error("Could not load live product data.");
       }
 
       const data = await response.json();
+      if (requestId !== hydrateRequestRef.current) {
+        return;
+      }
+
       const catalog = Array.isArray(data) ? data : data.results || [];
       const catalogById = new Map(catalog.map((product) => [String(product.id), product]));
 
@@ -104,6 +241,10 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
         };
       });
 
+      if (requestId !== hydrateRequestRef.current) {
+        return;
+      }
+
       setLiveCart(hydrated);
 
       const cleaned = hydrated.map(stripCartFlags);
@@ -123,6 +264,10 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
         onSyncCartRef.current(cleaned);
       }
     } catch (err) {
+      if (requestId !== hydrateRequestRef.current) {
+        return;
+      }
+
       setError(err.message || "Failed to refresh cart items.");
       setLiveCart(
         cart.map((item) => ({
@@ -131,7 +276,9 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
         }))
       );
     } finally {
-      setLoading(false);
+      if (requestId === hydrateRequestRef.current) {
+        setLoading(false);
+      }
     }
   }, [cart]);
 
@@ -184,6 +331,7 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
     }
     setShowModal(true);
     setOrderSuccess(false);
+    setCheckoutFieldErrors({ phone: "", email: "" });
     return true;
   }, [availableItems.length]);
 
@@ -220,6 +368,23 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
   const handleConfirmOrder = async (event) => {
     event.preventDefault();
     setPlacingOrder(true);
+    setCheckoutFieldErrors({ phone: "", email: "" });
+
+    const isGuest = !getAccessToken();
+    if (isGuest) {
+      const phoneError = validatePhone(customerFields.phone, { required: true });
+      const emailError = validateEmail(customerFields.email, { required: true });
+      if (phoneError || emailError) {
+        setCheckoutFieldErrors({
+          phone: phoneError || "",
+          email: emailError || "",
+        });
+        setPlacingOrder(false);
+        return;
+      }
+    }
+
+    const normalizedPhone = normalizePhone(customerFields.phone);
 
     const addressJson = JSON.stringify({
       detail: addressFields.detail,
@@ -243,7 +408,7 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
         body: JSON.stringify({
           items: checkoutItems,
           customer_name: customerFields.name.trim(),
-          customer_phone: customerFields.phone.trim(),
+          customer_phone: normalizedPhone || customerFields.phone.trim(),
           customer_email: customerFields.email.trim(),
           shipping_address: addressJson,
         }),
@@ -280,7 +445,7 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
         created_at: new Date().toISOString(),
         address: addressFields,
         customerName: customerFields.name.trim(),
-        customerPhone: customerFields.phone.trim(),
+        customerPhone: normalizedPhone || customerFields.phone.trim(),
         customerEmail: customerFields.email.trim(),
         items: availableItems.map((item) => ({
           id: item.id,
@@ -301,10 +466,32 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
         console.error("Failed to store local order", err);
       }
 
-      setNewOrderId(generatedOrderId);
-      setCompletedTotal(totals.total);
-      setOrderSuccess(true);
+      hydrateRequestRef.current += 1;
+      setLiveCart([]);
       onClearCart();
+
+      setCompletedOrderSummary({
+        id: generatedOrderId,
+        status: backendOrder.status || "pending",
+        total: Number(backendOrder.total_price || totals.total),
+        subtotal: totals.subtotal,
+        shipping: totals.shipping,
+        tax: totals.tax,
+        items: Array.isArray(backendOrder.items)
+          ? backendOrder.items
+          : availableItems.map((item) => ({
+              product_name: item.name,
+              store_name: item.store_name,
+              quantity: item.quantity,
+              price: item.price,
+            })),
+        customerName: customerFields.name.trim(),
+        customerPhone: normalizedPhone || customerFields.phone.trim(),
+        customerEmail: customerFields.email.trim(),
+        address: addressFields,
+        placedAt: backendOrder.created_at || new Date().toISOString(),
+      });
+      setOrderSuccess(true);
     } catch (err) {
       console.error("Checkout error:", err);
       window.alert("Failed to process checkout. Please try again.");
@@ -320,6 +507,29 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
   const handleRemoveUnavailable = () => {
     unavailableItems.forEach((item) => onRemoveItem(item.id));
   };
+
+  const handleDismissOrderConfirm = (destination = "/marketplace", navigateOptions = {}) => {
+    setOrderSuccess(false);
+    setShowModal(false);
+    setCompletedOrderSummary(null);
+    navigate(destination, navigateOptions);
+  };
+
+  if (orderSuccess && completedOrderSummary) {
+    return (
+      <div className="ct-page ct-page--confirm">
+        <OrderConfirmationModal
+          summary={completedOrderSummary}
+          onContinue={() => handleDismissOrderConfirm("/marketplace")}
+          onTrack={() =>
+            handleDismissOrderConfirm("/track-order", {
+              state: { orderId: completedOrderSummary.id },
+            })
+          }
+        />
+      </div>
+    );
+  }
 
   if (loading) {
     return (
@@ -540,23 +750,7 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
           <div className="ct-checkout-modal">
             <ModalCloseButton onClick={() => setShowModal(false)} />
 
-            {orderSuccess ? (
-              <div className="ct-success">
-                <div className="ct-success__icon">✓</div>
-                <h3>Order placed successfully</h3>
-                <p className="ct-success__text">
-                  Your order <strong>#{newOrderId}</strong> has been received.
-                </p>
-                <div className="ct-success__box">
-                  <p><span>Payment</span><strong>Cash on Delivery</strong></p>
-                  <p><span>Deliver to</span><strong>{addressFields.address1}, {addressFields.postal_code}</strong></p>
-                  <p><span>Total</span><strong>${completedTotal.toFixed(2)}</strong></p>
-                </div>
-                <button className="btn btn-primary" type="button" onClick={() => navigate("/orders")}>
-                  View orders
-                </button>
-              </div>
-            ) : (
+            {orderSuccess ? null : (
               <form onSubmit={handleConfirmOrder} className="ct-checkout-form">
                 <div className="ct-checkout-head">
                   <p className="ct-hero__eyebrow">Checkout</p>
@@ -581,20 +775,40 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
                       <label className="field-label">Phone number</label>
                       <input
                         className="field-input"
-                        type="text"
+                        type="tel"
+                        inputMode="numeric"
+                        maxLength={11}
                         value={customerFields.phone}
                         placeholder="e.g. 03001234567"
-                        onChange={(e) => setCustomerFields((prev) => ({ ...prev, phone: e.target.value }))}
+                        onChange={(e) => {
+                          setCustomerFields((prev) => ({ ...prev, phone: e.target.value }));
+                          if (checkoutFieldErrors.phone) {
+                            setCheckoutFieldErrors((prev) => ({ ...prev, phone: "" }));
+                          }
+                        }}
+                        required
                       />
+                      {checkoutFieldErrors.phone ? (
+                        <div className="auth-alert">{checkoutFieldErrors.phone}</div>
+                      ) : null}
 
-                      <label className="field-label">Email (optional)</label>
+                      <label className="field-label">Email</label>
                       <input
                         className="field-input"
                         type="email"
                         value={customerFields.email}
-                        placeholder="For order updates"
-                        onChange={(e) => setCustomerFields((prev) => ({ ...prev, email: e.target.value }))}
+                        placeholder="e.g. alex@gmail.com"
+                        onChange={(e) => {
+                          setCustomerFields((prev) => ({ ...prev, email: e.target.value }));
+                          if (checkoutFieldErrors.email) {
+                            setCheckoutFieldErrors((prev) => ({ ...prev, email: "" }));
+                          }
+                        }}
+                        required
                       />
+                      {checkoutFieldErrors.email ? (
+                        <div className="auth-alert">{checkoutFieldErrors.email}</div>
+                      ) : null}
                     </div>
 
                     <h4>Delivery address</h4>
@@ -651,6 +865,14 @@ function CartPage({ cart = [], onAddToCart, onUpdateQuantity, onRemoveItem, onCl
                   <div className="ct-checkout-aside">
                     <div className="ct-checkout-summary">
                       <h4>Order totals</h4>
+                      <ul className="ct-checkout-items">
+                        {availableItems.map((item) => (
+                          <li key={item.id} className="ct-checkout-items__row">
+                            <span className="ct-checkout-items__name">{item.name}</span>
+                            <span className="ct-checkout-items__qty">×{item.quantity}</span>
+                          </li>
+                        ))}
+                      </ul>
                       <div className="ct-summary-row">
                         <span>Items subtotal</span>
                         <strong>${totals.subtotal.toFixed(2)}</strong>

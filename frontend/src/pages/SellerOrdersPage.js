@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { fetchWithAuth, getAccessToken } from "../utils/authSession";
+import { getSellerItems, getSellerTotal } from "../utils/sellerOrders";
 import ModalCloseButton from "../components/ModalCloseButton";
 import "./SellerOrdersPage.css";
 
@@ -62,22 +63,6 @@ function getBuyerName(order) {
   );
 }
 
-function getSellerUsername() {
-  return localStorage.getItem("username") || "";
-}
-
-function filterSellerItems(order, sellerUsername) {
-  if (!Array.isArray(order.items)) return [];
-  return order.items.filter((item) => item.seller_username === sellerUsername);
-}
-
-function getSellerTotal(order, sellerUsername) {
-  return filterSellerItems(order, sellerUsername).reduce(
-    (sum, item) => sum + Number(item.price || 0) * item.quantity,
-    0
-  );
-}
-
 function getStatusClass(status) {
   const normalized = (status || "pending").toLowerCase();
   if (
@@ -126,9 +111,9 @@ function OrderStatusTrack({ status }) {
   );
 }
 
-function OrderDetailModal({ order, sellerUsername, updating, onClose, onUpdateStatus }) {
-  const sellerItems = filterSellerItems(order, sellerUsername);
-  const sellerTotal = getSellerTotal(order, sellerUsername);
+function OrderDetailModal({ order, updating, onClose, onUpdateStatus }) {
+  const sellerItems = getSellerItems(order);
+  const sellerTotal = getSellerTotal(order);
   const action = ORDER_ACTIONS[order.status];
   const address = parseShippingAddress(order.shipping_address);
   const addressLines = getAddressLines(address);
@@ -182,7 +167,7 @@ function OrderDetailModal({ order, sellerUsername, updating, onClose, onUpdateSt
           <div className="so-modal__sections">
             <section className="so-section so-section--order-detail">
               <header className="so-section__head">
-                <h3>Order detail</h3>
+                <h3>Your store items</h3>
                 <span className="so-section__badge">{sellerItems.length} item(s)</span>
               </header>
 
@@ -207,16 +192,11 @@ function OrderDetailModal({ order, sellerUsername, updating, onClose, onUpdateSt
                     </div>
                   ))}
                   <div className="so-items-table__foot">
-                    <span>Your items subtotal</span>
+                    <span>Your store total</span>
                     <strong>${sellerTotal.toFixed(2)}</strong>
                   </div>
                 </div>
               )}
-
-              <p className="so-order-total-line">
-                Order total (all stores):{" "}
-                <strong>${Number(order.total_price || 0).toFixed(2)}</strong>
-              </p>
             </section>
 
             <section className="so-section so-section--buyer">
@@ -268,7 +248,6 @@ function OrderDetailModal({ order, sellerUsername, updating, onClose, onUpdateSt
 }
 
 function SellerOrdersPage() {
-  const sellerUsername = getSellerUsername();
   const [orders, setOrders] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedOrderId, setSelectedOrderId] = useState(null);
@@ -359,7 +338,7 @@ function SellerOrdersPage() {
           <p className="so-page-head__eyebrow">Store orders</p>
           <h1>Orders</h1>
           <p className="so-page-head__sub">
-            Click a row to view the full order, buyer details, and status progress.
+            Each order shows only products sold from your store — not items from other sellers.
           </p>
         </div>
         <span className="so-page-head__count">{orders.length} total</span>
@@ -378,7 +357,7 @@ function SellerOrdersPage() {
           </div>
           <ul className="so-table__body">
             {orders.map((order) => {
-              const sellerTotal = getSellerTotal(order, sellerUsername);
+              const sellerTotal = getSellerTotal(order);
               const address = parseShippingAddress(order.shipping_address);
               const addressSummary =
                 getAddressLines(address).join(", ") || "—";
@@ -408,7 +387,6 @@ function SellerOrdersPage() {
       {selectedOrder && (
         <OrderDetailModal
           order={selectedOrder}
-          sellerUsername={sellerUsername}
           updating={updatingOrderId === selectedOrder.id}
           onClose={closeModal}
           onUpdateStatus={updateOrderStatus}

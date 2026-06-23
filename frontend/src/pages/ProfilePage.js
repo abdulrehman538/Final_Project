@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { fetchWithAuth } from "../utils/authSession";
 import { isAdmin, normalizeRole } from "../utils/roles";
+import { normalizePhone, validateEmail, validatePhone } from "../utils/validation";
 import ModalCloseButton from "../components/ModalCloseButton";
 
 const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
@@ -116,9 +117,24 @@ function ProfilePage({ onBecomeSeller }) {
 
   const handleSubmit = async (event) => {
     event.preventDefault();
-    setSaving(true);
     setMessage("");
     setError("");
+
+    const emailError = validateEmail(profile.email, { required: true });
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
+
+    const phoneError = validatePhone(profile.phone, { required: true });
+    if (phoneError) {
+      setError(phoneError);
+      return;
+    }
+
+    setSaving(true);
+
+    const normalizedPhone = normalizePhone(profile.phone);
 
     const addressJson = JSON.stringify({
       detail: addressFields.detail,
@@ -130,6 +146,7 @@ function ProfilePage({ onBecomeSeller }) {
 
     const updatedProfile = {
       ...profile,
+      phone: normalizedPhone || profile.phone,
       address: addressJson,
     };
 
@@ -186,6 +203,14 @@ function ProfilePage({ onBecomeSeller }) {
       return;
     }
 
+    const contactPhoneError = validatePhone(sellerForm.contact_phone, { required: true });
+    if (contactPhoneError) {
+      setError(contactPhoneError);
+      return;
+    }
+
+    const normalizedContactPhone = normalizePhone(sellerForm.contact_phone);
+
     if (!sellerForm.terms_accepted) {
       setError("You must accept the terms and conditions.");
       return;
@@ -205,7 +230,7 @@ function ProfilePage({ onBecomeSeller }) {
           ...profile,
           store_name: sellerForm.store_name.trim(),
           business_description: sellerForm.business_description.trim(),
-          contact_phone: sellerForm.contact_phone.trim(),
+          contact_phone: normalizedContactPhone,
           terms_accepted: true,
           is_seller: true,
         }),
@@ -221,13 +246,13 @@ function ProfilePage({ onBecomeSeller }) {
         ...data,
         store_name: sellerForm.store_name.trim(),
         business_description: sellerForm.business_description.trim(),
-        contact_phone: sellerForm.contact_phone.trim(),
+        contact_phone: normalizedContactPhone,
         terms_accepted: true,
         is_seller: false,
         seller_status: data.seller_status || "pending",
       }));
       localStorage.setItem("sellerStoreName", sellerForm.store_name.trim());
-      setMessage("Your seller application has been submitted and is pending admin approval.");
+      setMessage("Your seller application was submitted. Admin review usually takes up to 1 business day.");
       if (onBecomeSeller) {
         onBecomeSeller(sellerForm.store_name.trim());
       }
@@ -324,18 +349,25 @@ function ProfilePage({ onBecomeSeller }) {
                         id="seller-contact-phone"
                         className="field-input"
                         type="tel"
+                        inputMode="numeric"
+                        maxLength={11}
                         name="contact_phone"
-                        placeholder="Enter contact number"
+                        placeholder="e.g. 03001234567"
                         value={sellerForm.contact_phone}
                         onChange={handleSellerFieldChange}
+                        required
                       />
 
                       <div className="seller-upgrade-modal__terms">
                         <h4>Terms and Conditions</h4>
                         <p>
                           By becoming a seller, you agree to provide accurate product information,
-                          honor orders promptly, and follow marketplace policies. Misleading listings
-                          or repeated policy violations may lead to account review or suspension.
+                          honor orders promptly, and follow marketplace policies.
+                        </p>
+                        <p>
+                          <strong>Admin approval is required</strong> — you cannot list products until
+                          an admin approves your application, typically within{" "}
+                          <strong>1 business day</strong>.
                         </p>
                       </div>
 
@@ -346,7 +378,9 @@ function ProfilePage({ onBecomeSeller }) {
                           checked={sellerForm.terms_accepted}
                           onChange={handleSellerFieldChange}
                         />
-                        <span>I agree to the terms and conditions</span>
+                        <span>
+                          I understand approval can take up to 1 business day and I agree to the terms
+                        </span>
                       </label>
 
                       <div className="seller-upgrade-modal__actions">
@@ -385,7 +419,17 @@ function ProfilePage({ onBecomeSeller }) {
           <input className="field-input" name="full_name" value={profile.full_name} onChange={handleChange} />
 
           <label className="field-label">Phone</label>
-          <input className="field-input" name="phone" value={profile.phone} onChange={handleChange} />
+          <input
+            className="field-input"
+            type="tel"
+            inputMode="numeric"
+            maxLength={11}
+            name="phone"
+            placeholder="e.g. 03001234567"
+            value={profile.phone}
+            onChange={handleChange}
+            required
+          />
 
           <label className="field-label">Address Line 1</label>
           <input

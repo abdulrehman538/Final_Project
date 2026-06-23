@@ -476,17 +476,6 @@
   font-size: 0.72rem;
 }
 
-/* Reviews */
-.pd-reviews {
-  display: grid;
-  gap: 14px;
-  padding: 16px 18px;
-  border-radius: 16px;
-  background: var(--surface);
-  border: 1px solid rgba(229, 231, 235, 0.95);
-  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.04);
-}
-
 .pd-section-head {
   display: flex;
   align-items: center;
@@ -503,63 +492,6 @@
 
 .pd-section-head .pd-info__eyebrow {
   margin-bottom: 0;
-}
-
-.pd-comment-form {
-  display: grid;
-  gap: 10px;
-}
-
-.pd-comment-form textarea {
-  min-height: 72px;
-  resize: vertical;
-  border-radius: 12px;
-  font-size: 0.86rem;
-}
-
-.pd-comment-form .btn {
-  justify-self: start;
-  padding: 8px 14px;
-  border-radius: 10px;
-  font-size: 0.84rem;
-  font-weight: 700;
-}
-
-.pd-comment-list {
-  display: grid;
-  gap: 10px;
-}
-
-.pd-comment {
-  padding: 12px 14px;
-  border-radius: 12px;
-  background: var(--surface-alt);
-  border: 1px solid rgba(229, 231, 235, 0.9);
-}
-
-.pd-comment__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  margin-bottom: 6px;
-}
-
-.pd-comment__author {
-  font-weight: 700;
-  font-size: 0.84rem;
-}
-
-.pd-comment__date {
-  color: var(--muted);
-  font-size: 0.72rem;
-}
-
-.pd-comment p {
-  margin: 0;
-  color: var(--text);
-  font-size: 0.84rem;
-  line-height: 1.5;
 }
 
 .pd-empty {
@@ -690,8 +622,7 @@
 }
 
 @media (max-width: 600px) {
-  .pd-info,
-  .pd-reviews {
+  .pd-info {
     padding: 14px;
   }
 

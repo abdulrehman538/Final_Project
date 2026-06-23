@@ -228,6 +228,14 @@ function AppLayout({
                   </button>
                 )}
 
+                <button
+                  type="button"
+                  className="nav-seller-link nav-seller-link--track"
+                  onClick={() => navigate("/track-order")}
+                >
+                  Track order
+                </button>
+
                 {showSellerPendingLink && (
                   <button
                     type="button"

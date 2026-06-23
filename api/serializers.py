@@ -1,4 +1,5 @@
 from django.contrib.auth.models import User
+from decimal import Decimal
 from rest_framework import serializers
 
 from .models import (
@@ -11,6 +12,7 @@ from .models import (
     ProductImage,
     UserProfile,
 )
+from .validators import clean_email, clean_pk_phone
 
 
 class ProductImageSerializer(serializers.ModelSerializer):
@@ -78,6 +80,17 @@ class UserRegisterSerializer(serializers.ModelSerializer):
             "apply_as_seller",
         ]
 
+    def validate_email(self, value):
+        return clean_email(value, required=True)
+
+    def validate_phone(self, value):
+        return clean_pk_phone(value, required=True)
+
+    def validate_contact_phone(self, value):
+        if not (value or "").strip():
+            return value
+        return clean_pk_phone(value)
+
     def validate(self, attrs):
         if attrs.get("apply_as_seller"):
             if not (attrs.get("store_name") or "").strip():
@@ -88,6 +101,8 @@ class UserRegisterSerializer(serializers.ModelSerializer):
                 )
             if not attrs.get("terms_accepted"):
                 raise serializers.ValidationError({"terms_accepted": "You must accept the seller terms."})
+            contact_phone = attrs.get("contact_phone") or attrs.get("phone")
+            clean_pk_phone(contact_phone, required=True)
         return attrs
 
     def create(self, validated_data):
@@ -210,6 +225,28 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "seller_status",
             "updated_at",
         ]
+
+    def validate_email(self, value):
+        return clean_email(value, required=True)
+
+    def validate_phone(self, value):
+        return clean_pk_phone(value, required=True)
+
+    def validate_contact_phone(self, value):
+        if not (value or "").strip():
+            return value
+        return clean_pk_phone(value)
+
+    def validate(self, attrs):
+        applying_as_seller = bool(
+            (attrs.get("store_name") or "").strip()
+            or (attrs.get("business_description") or "").strip()
+            or (attrs.get("contact_phone") or "").strip()
+            or attrs.get("terms_accepted") is True
+        )
+        if applying_as_seller:
+            clean_pk_phone(attrs.get("contact_phone"), required=True)
+        return attrs
 
     def update(self, instance, validated_data):
         user_data = validated_data.pop("user", {})
@@ -382,6 +419,65 @@ class OrderSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
+
+
+class SellerOrderSerializer(serializers.ModelSerializer):
+    """Order payload for sellers — only their line items and subtotal."""
+
+    customer_username = serializers.CharField(
+        source="buyer.username",
+        read_only=True,
+    )
+    display_customer = serializers.SerializerMethodField()
+    items = serializers.SerializerMethodField()
+    seller_subtotal = serializers.SerializerMethodField()
+
+    def _seller_items(self, order):
+        seller = self.context["request"].user
+        return order.items.filter(seller=seller)
+
+    def get_display_customer(self, obj):
+        if obj.buyer_id:
+            return obj.buyer.username
+        return obj.customer_name or "Guest"
+
+    def get_items(self, order):
+        return OrderItemSerializer(
+            self._seller_items(order).select_related("product", "seller"),
+            many=True,
+        ).data
+
+    def get_seller_subtotal(self, order):
+        total = Decimal("0")
+        for item in self._seller_items(order):
+            total += item.price * item.quantity
+        return total
+
+    class Meta:
+        model = Order
+        fields = [
+            "id",
+            "customer_username",
+            "display_customer",
+            "customer_name",
+            "customer_phone",
+            "customer_email",
+            "shipping_address",
+            "status",
+            "seller_subtotal",
+            "items",
+            "created_at",
+            "updated_at",
+        ]
+        read_only_fields = fields
+
+
+class OrderTrackSerializer(serializers.ModelSerializer):
+    status_label = serializers.CharField(source="get_status_display", read_only=True)
+
+    class Meta:
+        model = Order
+        fields = ["id", "status", "status_label", "created_at", "updated_at"]
 
 
 class CartItemSerializer(serializers.ModelSerializer):

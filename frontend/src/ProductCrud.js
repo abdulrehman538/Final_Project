@@ -772,7 +772,6 @@ function ProductCrud({ role = "user" }) {
                 </div>
 
                 <footer className="store-modal__footer">
-                  <button type="button" className="btn btn-secondary" onClick={closeProductModal}>Close</button>
                   <button
                     type="button"
                     className="btn btn-primary"

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { getPostLoginPath, normalizeRole } from "../utils/roles";
 import { saveAuthTokens } from "../utils/authSession";
+import { validateEmail, validatePhone } from "../utils/validation";
 import "./AuthPage.css";
 
 const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
@@ -151,8 +152,18 @@ function AuthPage({ onLogin, portalOnly = false }) {
       setError("Please enter your email.");
       return;
     }
+    const emailError = validateEmail(signup.email, { required: true });
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
     if (!signup.phone.trim()) {
       setError("Please enter your mobile number.");
+      return;
+    }
+    const phoneError = validatePhone(signup.phone, { required: true });
+    if (phoneError) {
+      setError(phoneError);
       return;
     }
     if (!signup.password) {
@@ -233,7 +244,7 @@ function AuthPage({ onLogin, portalOnly = false }) {
     if (response.ok) {
       setMessage(
         portalOnly
-          ? "Seller account created! Your application is pending admin approval. Please sign in."
+          ? "Application received. Review is typically completed within one business day. You may sign in now; seller features activate after approval."
           : "Account created successfully! Please sign in."
       );
       setMode("signin");
@@ -267,254 +278,337 @@ function AuthPage({ onLogin, portalOnly = false }) {
   };
 
   return (
-    <div className="auth-shell">
-      <section className="auth-promo">
-        <div className="auth-overlay" />
-        <div className="auth-promo-content">
-          <div className="auth-brand">
-            <img
-              src="/Final%20App%20Logo.png"
-              alt="CArTGo logo"
-              className="auth-brand-logo"
-            />
-            <div>
-              <p className="auth-brand-title">CArTGo</p>
-              <span className="auth-brand-subtitle">Buy. Sell. Grow.</span>
-            </div>
-          </div>
-
-          <h1>{portalOnly ? "Seller & admin access" : "Everything you need to shop and sell online."}</h1>
-          <p>
-            {portalOnly
-              ? "Sign in to manage your store or admin dashboard. Shoppers can browse and checkout without an account."
-              : "Browse curated products, save favorites, manage your profile, and check out through a clean marketplace experience designed for shoppers and sellers."}
-          </p>
-
-          <div className="auth-stats">
-            <div>
-              <strong>10K+</strong>
-              <span>Products</span>
-            </div>
-            <div>
-              <strong>500+</strong>
-              <span>Stores</span>
-            </div>
-            <div>
-              <strong>24/7</strong>
-              <span>Support</span>
-            </div>
+    <div className="portal-auth">
+      <header className="portal-auth__header">
+        <div className="portal-auth__brand">
+          <img src="/Final%20App%20Logo.png" alt="CArTGo" className="portal-auth__logo" />
+          <div>
+            <strong>CArTGo</strong>
+            <span>Seller & operations portal</span>
           </div>
         </div>
-      </section>
+        <button type="button" className="portal-auth__market-link" onClick={() => navigate("/marketplace")}>
+          Return to marketplace
+        </button>
+      </header>
 
-      <section className="auth-panel">
-        <div className="auth-tabs">
-          <button
-            type="button"
-            className={`auth-tab${mode === "signin" ? " is-active" : ""}`}
-            onClick={() => switchMode("signin")}
-          >
-            Sign In
-          </button>
-          <button
-            type="button"
-            className={`auth-tab${mode === "signup" ? " is-active" : ""}`}
-            onClick={() => switchMode("signup")}
-          >
-            Create Seller Account
-          </button>
-        </div>
+      <main className="portal-auth__main">
+        <div
+          className={`portal-auth__panel${
+            mode === "signup" ? " portal-auth__panel--application" : " portal-auth__panel--signin"
+          }`}
+        >
+          <div className="portal-auth__tabs">
+            <button
+              type="button"
+              className={`portal-auth__tab${mode === "signin" ? " is-active" : ""}`}
+              onClick={() => switchMode("signin")}
+            >
+              Sign in
+            </button>
+            <button
+              type="button"
+              className={`portal-auth__tab${mode === "signup" ? " is-active" : ""}`}
+              onClick={() => switchMode("signup")}
+            >
+              Seller application
+            </button>
+          </div>
 
-        <div className="auth-card auth-card--centered">
-          <form className="auth-form" onSubmit={mode === "signin" ? handleLogin : handleSignup}>
+          {mode === "signup" && (
+            <header className="portal-application__intro">
+              <h1>Register as a seller</h1>
+              <p>
+                Complete the form below to apply for a seller account. Applications are reviewed before
+                store access is granted.
+              </p>
+            </header>
+          )}
+
+          <form
+            className={`portal-auth__form${mode === "signup" ? " portal-auth__form--application" : ""}`}
+            onSubmit={mode === "signin" ? handleLogin : handleSignup}
+          >
             {error && <div className="auth-alert">{error}</div>}
             {message && <div className="auth-alert auth-alert-success">{message}</div>}
 
             {mode === "signup" ? (
               <>
-                {/* Step Progress Bar */}
-                <div className="signup-steps">
+                <div className="signup-steps signup-steps--portal">
                   <div
                     className={`signup-step ${signupStage === 1 ? "is-active" : ""} ${signupStage > 1 ? "is-complete" : ""}`}
                     onClick={() => signupStage > 1 && setSignupStage(1)}
                     style={{ cursor: signupStage > 1 ? "pointer" : "default" }}
                   >
                     <span className="step-num">1</span>
-                    <span className="step-label">Personal Info</span>
+                    <span className="step-label">Account credentials</span>
                   </div>
                   <div className="step-line-container">
                     <div className={`step-line ${signupStage > 1 ? "is-complete" : ""}`} />
                   </div>
                   <div className={`signup-step ${signupStage === 2 ? "is-active" : ""}`}>
                     <span className="step-num">2</span>
-                    <span className="step-label">{portalOnly ? "Store details" : "Address Details"}</span>
+                    <span className="step-label">Business profile</span>
                   </div>
                 </div>
 
                 {signupStage === 1 ? (
-                  <div className="form-stage-content fade-in">
-                    <label className="field-label">Username</label>
-                    <input
-                      className={`field-input field-input--small${usernameStatus === "taken"
-                          ? " field-input--error"
-                          : usernameStatus === "available"
-                            ? " field-input--success"
-                            : ""
-                        }`}
-                      type="text"
-                      placeholder="e.g. alex_johnson"
-                      value={signup.username}
-                      onChange={(e) =>
-                        setSignup((current) => ({
-                          ...current,
-                          username: e.target.value.trim(),
-                        }))
-                      }
-                      required
-                    />
-                    {usernameStatus === "checking" && (
-                      <p className="username-status username-status--checking">
-                        ⏳ Checking availability…
-                      </p>
-                    )}
-                    {usernameStatus === "available" && (
-                      <p className="username-status username-status--available">
-                        ✓ Username is available
-                      </p>
-                    )}
-                    {usernameStatus === "taken" && (
-                      <p className="username-status username-status--taken">
-                        ✗ Username already taken
-                      </p>
-                    )}
+                  <div className="portal-form-grid fade-in">
+                    <div className="portal-field">
+                      <label className="field-label">Username</label>
+                      <input
+                        className={`field-input portal-input${usernameStatus === "taken"
+                            ? " field-input--error"
+                            : usernameStatus === "available"
+                              ? " field-input--success"
+                              : ""
+                          }`}
+                        type="text"
+                        placeholder="Letters, numbers, @ . + - _"
+                        value={signup.username}
+                        onChange={(e) =>
+                          setSignup((current) => ({
+                            ...current,
+                            username: e.target.value.trim(),
+                          }))
+                        }
+                        required
+                      />
+                      {usernameStatus === "checking" && (
+                        <p className="username-status username-status--checking">Checking availability…</p>
+                      )}
+                      {usernameStatus === "available" && (
+                        <p className="username-status username-status--available">Username is available</p>
+                      )}
+                      {usernameStatus === "taken" && (
+                        <p className="username-status username-status--taken">Username is already taken</p>
+                      )}
+                    </div>
 
-                    <label className="field-label">Email</label>
-                    <input
-                      className="field-input field-input--small"
-                      type="email"
-                      placeholder="e.g. alex@gmail.com"
-                      value={signup.email}
-                      onChange={(e) => setSignup((current) => ({ ...current, email: e.target.value }))}
-                      required
-                    />
+                    <div className="portal-field">
+                      <label className="field-label">Email address</label>
+                      <input
+                        className="field-input portal-input"
+                        type="email"
+                        placeholder="business@company.com"
+                        value={signup.email}
+                        onChange={(e) => setSignup((current) => ({ ...current, email: e.target.value }))}
+                        required
+                      />
+                    </div>
 
-                    <label className="field-label">Mobile Number</label>
-                    <input
-                      className="field-input field-input--small"
-                      type="text"
-                      placeholder="e.g. 03001234567"
-                      value={signup.phone}
-                      onChange={(e) => setSignup((current) => ({ ...current, phone: e.target.value }))}
-                      required
-                    />
+                    <div className="portal-field">
+                      <label className="field-label">Mobile number</label>
+                      <input
+                        className="field-input portal-input"
+                        type="tel"
+                        inputMode="numeric"
+                        maxLength={11}
+                        placeholder="03001234567"
+                        value={signup.phone}
+                        onChange={(e) => setSignup((current) => ({ ...current, phone: e.target.value }))}
+                        required
+                      />
+                    </div>
 
-                    <label className="field-label">Password</label>
-                    <input
-                      className="field-input field-input--small"
-                      type="password"
-                      placeholder="Create password"
-                      value={signup.password}
-                      onChange={(e) => setSignup((current) => ({ ...current, password: e.target.value }))}
-                      required
-                    />
+                    <div className="portal-field">
+                      <label className="field-label">Password</label>
+                      <input
+                        className="field-input portal-input"
+                        type="password"
+                        placeholder="Minimum 8 characters recommended"
+                        value={signup.password}
+                        onChange={(e) => setSignup((current) => ({ ...current, password: e.target.value }))}
+                        required
+                      />
+                    </div>
 
-                    <label className="field-label">Confirm Password</label>
-                    <input
-                      className="field-input field-input--small"
-                      type="password"
-                      placeholder="Confirm password"
-                      value={signup.confirmPassword}
-                      onChange={(e) => setSignup((current) => ({ ...current, confirmPassword: e.target.value }))}
-                      required
-                    />
+                    <div className="portal-field portal-field--full">
+                      <label className="field-label">Confirm password</label>
+                      <input
+                        className="field-input portal-input"
+                        type="password"
+                        placeholder="Re-enter password"
+                        value={signup.confirmPassword}
+                        onChange={(e) => setSignup((current) => ({ ...current, confirmPassword: e.target.value }))}
+                        required
+                      />
+                    </div>
                   </div>
-                ) : (
-                  <div className="form-stage-content fade-in">
-                    {portalOnly && (
-                      <>
-                        <label className="field-label" htmlFor="seller-store-name">Store name</label>
-                        <input
-                          id="seller-store-name"
-                          className="field-input field-input--small"
-                          type="text"
-                          placeholder="Your store or brand name"
-                          value={signup.storeName}
-                          onChange={(e) => setSignup((current) => ({ ...current, storeName: e.target.value }))}
-                          required
-                        />
+                ) : portalOnly ? (
+                  <div className="portal-application__body fade-in">
+                    <div className="portal-application__columns">
+                      <section className="portal-application__block">
+                        <h2 className="portal-application__block-title">Store profile</h2>
+                        <p className="portal-application__block-desc">
+                          Public-facing information displayed to customers on the marketplace.
+                        </p>
+                        <div className="portal-field">
+                          <label className="field-label" htmlFor="seller-store-name">Store name</label>
+                          <input
+                            id="seller-store-name"
+                            className="field-input portal-input"
+                            type="text"
+                            placeholder="Registered business or brand name"
+                            value={signup.storeName}
+                            onChange={(e) =>
+                              setSignup((current) => ({ ...current, storeName: e.target.value }))
+                            }
+                            required
+                          />
+                        </div>
+                        <div className="portal-field">
+                          <label className="field-label" htmlFor="seller-business-description">
+                            Business description
+                          </label>
+                          <textarea
+                            id="seller-business-description"
+                            className="field-input portal-input portal-textarea"
+                            placeholder="Product categories, service standards, and what customers should expect."
+                            rows={5}
+                            value={signup.businessDescription}
+                            onChange={(e) =>
+                              setSignup((current) => ({
+                                ...current,
+                                businessDescription: e.target.value,
+                              }))
+                            }
+                            required
+                          />
+                        </div>
+                      </section>
 
-                        <label className="field-label" htmlFor="seller-business-description">Business description</label>
-                        <textarea
-                          id="seller-business-description"
-                          className="field-input field-input--small"
-                          placeholder="What do you sell? Tell customers about your business."
-                          rows={3}
-                          value={signup.businessDescription}
-                          onChange={(e) => setSignup((current) => ({ ...current, businessDescription: e.target.value }))}
-                          required
-                        />
-                      </>
-                    )}
+                      <section className="portal-application__block">
+                        <h2 className="portal-application__block-title">Business address</h2>
+                        <p className="portal-application__block-desc">
+                          Used for verification and operational correspondence.
+                        </p>
+                        <div className="portal-field">
+                          <label className="field-label">Address line 1</label>
+                          <input
+                            className="field-input portal-input"
+                            type="text"
+                            placeholder="Building, unit, or street number"
+                            value={signup.address1}
+                            onChange={(e) =>
+                              setSignup((current) => ({ ...current, address1: e.target.value }))
+                            }
+                            required
+                          />
+                        </div>
+                        <div className="portal-field">
+                          <label className="field-label">Address line 2</label>
+                          <input
+                            className="field-input portal-input"
+                            type="text"
+                            placeholder="Street, sector, or area"
+                            value={signup.address2}
+                            onChange={(e) =>
+                              setSignup((current) => ({ ...current, address2: e.target.value }))
+                            }
+                          />
+                        </div>
+                        <div className="portal-field">
+                          <label className="field-label">City / region</label>
+                          <input
+                            className="field-input portal-input"
+                            type="text"
+                            placeholder="City, state, or landmark"
+                            value={signup.address3}
+                            onChange={(e) =>
+                              setSignup((current) => ({ ...current, address3: e.target.value }))
+                            }
+                          />
+                        </div>
+                        <div className="portal-field">
+                          <label className="field-label">Postal code</label>
+                          <input
+                            className="field-input portal-input"
+                            type="text"
+                            placeholder="44000"
+                            value={signup.postalCode}
+                            onChange={(e) =>
+                              setSignup((current) => ({ ...current, postalCode: e.target.value }))
+                            }
+                            required
+                          />
+                        </div>
+                      </section>
+                    </div>
 
-                    <label className="field-label">Address Line 1</label>
-                    <input
-                      className="field-input field-input--small"
-                      type="text"
-                      placeholder="House/Apartment No, building name"
-                      value={signup.address1}
-                      onChange={(e) => setSignup((current) => ({ ...current, address1: e.target.value }))}
-                      required
-                    />
-
-                    <label className="field-label">Address Line 2 (Optional)</label>
-                    <input
-                      className="field-input field-input--small"
-                      type="text"
-                      placeholder="Street, area, colony name"
-                      value={signup.address2}
-                      onChange={(e) => setSignup((current) => ({ ...current, address2: e.target.value }))}
-                    />
-
-                    <label className="field-label">Address Line 3 (Optional)</label>
-                    <input
-                      className="field-input field-input--small"
-                      type="text"
-                      placeholder="Landmark, city, state"
-                      value={signup.address3}
-                      onChange={(e) => setSignup((current) => ({ ...current, address3: e.target.value }))}
-                    />
-
-                    <label className="field-label">Postal / Zip Code</label>
-                    <input
-                      className="field-input field-input--small"
-                      type="text"
-                      placeholder="e.g. 44000"
-                      value={signup.postalCode}
-                      onChange={(e) => setSignup((current) => ({ ...current, postalCode: e.target.value }))}
-                      required
-                    />
-
-                    {portalOnly && (
-                      <label className="seller-checkbox" style={{ marginTop: "12px" }}>
+                    <section className="portal-application__agreement">
+                      <h2 className="portal-application__block-title">Seller agreement</h2>
+                      <div className="portal-agreement__document">
+                        <p>
+                          This application registers your business as a seller on the CArTGo marketplace.
+                          All information submitted must be accurate and kept current.
+                        </p>
+                        <p>
+                          <strong>Approval.</strong> Seller privileges are not activated at registration.
+                          Each application is reviewed by our operations team. Most reviews are completed
+                          within one business day. You may sign in after submitting this form, but
+                          listing products and seller tools remain unavailable until approval is granted.
+                        </p>
+                        <p>
+                          <strong>Operating standards.</strong> You agree to provide accurate product
+                          listings, maintain sufficient inventory, fulfill orders promptly, and handle
+                          customer communication professionally.
+                        </p>
+                        <p>
+                          <strong>Enforcement.</strong> CArTGo may decline, suspend, or revoke seller
+                          access for policy violations, misleading listings, or fraudulent activity.
+                        </p>
+                      </div>
+                      <label className="portal-agreement__accept seller-checkbox">
                         <input
                           type="checkbox"
                           checked={signup.termsAccepted}
-                          onChange={(e) => setSignup((current) => ({ ...current, termsAccepted: e.target.checked }))}
+                          onChange={(e) =>
+                            setSignup((current) => ({
+                              ...current,
+                              termsAccepted: e.target.checked,
+                            }))
+                          }
                         />
-                        <span>I agree to the seller terms and will provide accurate product information.</span>
+                        <span>
+                          I have read the Seller Agreement and acknowledge that access is granted only
+                          after administrative approval, typically within one business day.
+                        </span>
                       </label>
-                    )}
-
+                    </section>
+                  </div>
+                ) : (
+                  <div className="portal-form-grid fade-in">
+                    <div className="portal-field portal-field--full">
+                      <label className="field-label">Address line 1</label>
+                      <input
+                        className="field-input portal-input"
+                        type="text"
+                        value={signup.address1}
+                        onChange={(e) => setSignup((current) => ({ ...current, address1: e.target.value }))}
+                        required
+                      />
+                    </div>
+                    <div className="portal-field">
+                      <label className="field-label">Postal code</label>
+                      <input
+                        className="field-input portal-input"
+                        type="text"
+                        value={signup.postalCode}
+                        onChange={(e) => setSignup((current) => ({ ...current, postalCode: e.target.value }))}
+                        required
+                      />
+                    </div>
                   </div>
                 )}
               </>
             ) : (
-              <>
+              <div className="portal-signin-fields">
                 <label className="field-label">Username</label>
                 <input
-                  className="field-input field-input--small"
+                  className="field-input portal-input"
                   type="text"
-                  placeholder="Enter your username"
+                  placeholder="Your account username"
                   value={signin.username}
                   onChange={(e) => setSignin((current) => ({ ...current, username: e.target.value }))}
                   required
@@ -522,49 +616,46 @@ function AuthPage({ onLogin, portalOnly = false }) {
 
                 <label className="field-label">Password</label>
                 <input
-                  className="field-input field-input--small"
+                  className="field-input portal-input"
                   type="password"
-                  placeholder="Enter your password"
+                  placeholder="Your account password"
                   value={signin.password}
                   onChange={(e) => setSignin((current) => ({ ...current, password: e.target.value }))}
                   required
                 />
-              </>
+              </div>
             )}
 
-            <div className="auth-actions-row" style={{ display: "flex", gap: "10px", marginTop: "16px" }}>
-              {mode === "signup" && signupStage === 2 && (
-                <button
-                  className="btn btn-secondary auth-btn-small"
-                  type="button"
-                  onClick={() => setSignupStage(1)}
-                  style={{ flex: "1", padding: "10px", minHeight: "40px", fontSize: "0.9rem" }}
-                >
-                  Back
+            <footer className="portal-auth__footer">
+              <div className="portal-auth__actions">
+                {mode === "signup" && signupStage === 2 && (
+                  <button
+                    className="btn btn-secondary"
+                    type="button"
+                    onClick={() => setSignupStage(1)}
+                  >
+                    Back
+                  </button>
+                )}
+                <button className="btn btn-primary" type="submit">
+                  {mode === "signin"
+                    ? "Sign in"
+                    : signupStage === 1
+                      ? "Continue to business profile"
+                      : "Submit application"}
                 </button>
-              )}
-              <button
-                className="btn btn-primary auth-btn-small"
-                type="submit"
-                style={{ flex: "2", padding: "10px", minHeight: "40px", fontSize: "0.9rem" }}
-              >
-                {mode === "signin" ? "Continue" : signupStage === 1 ? (portalOnly ? "Next: Store details" : "Next: Address Details") : (portalOnly ? "Submit seller application" : "Create Account")}
-              </button>
-            </div>
+              </div>
 
-            <p className="auth-switch" style={{ marginTop: "16px", justifyContent: "center", flexWrap: "wrap", gap: "8px" }}>
-              {mode === "signin" ? "New seller?" : "Already registered?"}
-              <button type="button" onClick={() => switchMode(mode === "signin" ? "signup" : "signin")}>
-                {mode === "signin" ? "Create seller account" : "Sign in"}
-              </button>
-              <span>·</span>
-              <button type="button" onClick={() => navigate("/marketplace")}>
-                Continue shopping
-              </button>
-            </p>
+              <p className="portal-auth__switch">
+                {mode === "signin" ? "New seller?" : "Already registered?"}
+                <button type="button" onClick={() => switchMode(mode === "signin" ? "signup" : "signin")}>
+                  {mode === "signin" ? "Start application" : "Sign in"}
+                </button>
+              </p>
+            </footer>
           </form>
         </div>
-      </section>
+      </main>
     </div>
   );
 }
