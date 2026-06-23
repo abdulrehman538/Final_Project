@@ -35,9 +35,21 @@ class ProductImage(models.Model):
         return f"{self.product.name} image"
 
 class UserProfile(models.Model):
+    SELLER_STATUS_CHOICES = [
+        ('none', 'No request'),
+        ('pending', 'Pending approval'),
+        ('approved', 'Approved'),
+        ('rejected', 'Rejected'),
+        ('banned', 'Banned'),
+    ]
+
     user = models.OneToOneField(User, on_delete=models.CASCADE, related_name="profile")
     is_seller = models.BooleanField(default=False)
+    seller_status = models.CharField(max_length=20, choices=SELLER_STATUS_CHOICES, default='none')
     store_name = models.CharField(max_length=120, blank=True, default="")
+    business_description = models.TextField(blank=True, default="")
+    contact_phone = models.CharField(max_length=30, blank=True, default="")
+    terms_accepted = models.BooleanField(default=False)
     full_name = models.CharField(max_length=150, blank=True, default="")
     phone = models.CharField(max_length=30, blank=True, default="")
     address = models.CharField(max_length=255, blank=True, default="")
@@ -62,18 +74,25 @@ class ProductComment(models.Model):
 class Order(models.Model):
     STATUS_CHOICES = [
         ('pending', 'Pending'),
+        ('confirmed', 'Confirmed'),
+        ('shipped', 'Shipped'),
+        ('delivered', 'Delivered'),
         ('completed', 'Completed'),
         ('cancelled', 'Cancelled'),
     ]
 
     buyer = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="orders")
+    customer_name = models.CharField(max_length=150, blank=True, default="")
+    customer_phone = models.CharField(max_length=30, blank=True, default="")
+    customer_email = models.EmailField(blank=True, default="")
+    shipping_address = models.TextField(blank=True, default="")
     status = models.CharField(max_length=20, choices=STATUS_CHOICES, default='pending')
     total_price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     def __str__(self):
-        return f"Order {self.id} - {self.buyer.username if self.buyer else 'Unknown'}"
+        return f"Order {self.id} - {self.customer_name or (self.buyer.username if self.buyer else 'Guest')}"
 
 
 class OrderItem(models.Model):
@@ -82,6 +101,27 @@ class OrderItem(models.Model):
     quantity = models.PositiveIntegerField(default=1)
     price = models.DecimalField(max_digits=10, decimal_places=2, default=0)
     seller = models.ForeignKey(User, on_delete=models.SET_NULL, null=True, blank=True, related_name="sold_items")
-    
+
     def __str__(self):
         return f"{self.product.name} - Qty: {self.quantity}"
+
+
+class Cart(models.Model):
+    user = models.OneToOneField(User, on_delete=models.CASCADE, related_name='cart')
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    def __str__(self):
+        return f"Cart of {self.user.username}"
+
+class CartItem(models.Model):
+    cart = models.ForeignKey(Cart, on_delete=models.CASCADE, related_name='items')
+    product = models.ForeignKey(Product, on_delete=models.CASCADE)
+    quantity = models.PositiveIntegerField()
+    added_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        unique_together = ('cart', 'product')
+
+    def __str__(self):
+        return f"{self.product.name} x {self.quantity} in {self.cart.user.username}'s cart"

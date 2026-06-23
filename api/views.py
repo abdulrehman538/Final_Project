@@ -1,8 +1,14 @@
 from rest_framework import generics, parsers, status
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.exceptions import ValidationError
+from rest_framework.permissions import IsAuthenticated, AllowAny, SAFE_METHODS
 from rest_framework.response import Response
-from django.contrib.auth.models import User
+from django.contrib.auth.models import User, Group
 from django.db import transaction
+from django.db.models import Count, F, Q, Sum
+from django.utils import timezone
+from datetime import timedelta
+from decimal import Decimal
+from django.shortcuts import get_object_or_404
 
 from .models import (
     Product,
@@ -11,23 +17,30 @@ from .models import (
     ProductComment,
     Order,
     OrderItem,
+    Cart,
+    CartItem,
 )
 
+from .stock import aggregate_cart_quantities, deduct_product_stock, restore_order_stock
+from .validators import clean_email, clean_pk_phone
 from .serializers import (
     ProductSerializer,
     UserRegisterSerializer,
     UserProfileSerializer,
+    AdminStoreSerializer,
+    AdminStoreDetailSerializer,
+    AdminLowStockProductSerializer,
     ProductCommentSerializer,
     OrderSerializer,
-    OrderItemSerializer,
+    SellerOrderSerializer,
+    OrderTrackSerializer,
     ProductImageSerializer,
+    CartSerializer,
 )
 
-from .permissions import (
-    IsSellerOrAdminOrReadOnly,
-    is_admin,
-    is_seller,
-)
+from .permissions import IsSellerOrAdminOrReadOnly
+from .authentication import OptionalJWTAuthentication
+from .utils import delete_image_instance, get_user_role, is_admin, is_seller, public_product_queryset
 
 
 class RegisterView(generics.CreateAPIView):
@@ -48,13 +61,361 @@ class UserRoleView(generics.GenericAPIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        if is_admin(request.user):
-            return Response({"role": "admin"})
+        profile = getattr(request.user, "profile", None)
+        return Response(
+            {
+                "role": get_user_role(request.user),
+                "seller_status": getattr(profile, "seller_status", "none"),
+                "is_seller": bool(getattr(profile, "is_seller", False)),
+            }
+        )
 
-        if is_seller(request.user):
-            return Response({"role": "seller"})
 
-        return Response({"role": "buyer"})
+class ProductSearchView(generics.ListAPIView):
+    serializer_class = ProductSerializer
+    permission_classes = [AllowAny]
+
+    def get_queryset(self):
+        query = (self.request.query_params.get("q") or "").strip()
+        queryset = public_product_queryset(
+            Product.objects.select_related("owner").prefetch_related("images")
+        )
+        if not query:
+            return queryset.none()
+
+        terms = [term for term in query.split() if term]
+        if not terms:
+            return queryset.none()
+
+        q_object = Q()
+        for term in terms:
+            q_object |= Q(name__icontains=term)
+            q_object |= Q(description__icontains=term)
+            q_object |= Q(category__icontains=term)
+            q_object |= Q(store_name__icontains=term)
+
+        return queryset.filter(q_object)[:20]
+
+
+class SellerRequestListView(generics.ListAPIView):
+    serializer_class = UserProfileSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if not is_admin(self.request.user):
+            return UserProfile.objects.none()
+        return UserProfile.objects.filter(seller_status="pending").select_related("user").order_by("-updated_at")
+
+
+class ApproveSellerRequestView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_admin(request.user):
+            return Response({"detail": "Only admins can approve seller requests."}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get("user_id")
+        if not user_id:
+            return Response({"detail": "user_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = UserProfile.objects.select_related("user").filter(user_id=user_id).first()
+        if not profile:
+            return Response({"detail": "Seller request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        profile.seller_status = "approved"
+        profile.is_seller = True
+        profile.save(update_fields=["seller_status", "is_seller", "updated_at"])
+
+        seller_group, _ = Group.objects.get_or_create(name="Seller")
+        profile.user.groups.add(seller_group)
+
+        return Response({
+            "detail": "Seller approved.",
+            "username": profile.user.username,
+            "seller_status": profile.seller_status,
+            "is_seller": profile.is_seller,
+        })
+
+
+class RejectSellerRequestView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_admin(request.user):
+            return Response({"detail": "Only admins can reject seller requests."}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get("user_id")
+        if not user_id:
+            return Response({"detail": "user_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = UserProfile.objects.select_related("user").filter(user_id=user_id).first()
+        if not profile:
+            return Response({"detail": "Seller request not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        profile.seller_status = "rejected"
+        profile.is_seller = False
+        profile.save(update_fields=["seller_status", "is_seller", "updated_at"])
+
+        return Response({
+            "detail": "Seller request rejected.",
+            "username": profile.user.username,
+            "seller_status": profile.seller_status,
+            "is_seller": profile.is_seller,
+        })
+
+
+class AdminBanStoreView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_admin(request.user):
+            return Response({"detail": "Only admins can ban stores."}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get("user_id")
+        if not user_id:
+            return Response({"detail": "user_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = UserProfile.objects.select_related("user").filter(user_id=user_id).first()
+        if not profile:
+            return Response({"detail": "Store not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if profile.seller_status not in {"approved", "banned"}:
+            return Response(
+                {"detail": "Only approved stores can be banned."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.seller_status = "banned"
+        profile.is_seller = False
+        profile.save(update_fields=["seller_status", "is_seller", "updated_at"])
+
+        seller_group = Group.objects.filter(name="Seller").first()
+        if seller_group:
+            profile.user.groups.remove(seller_group)
+
+        return Response({
+            "detail": "Store banned from selling.",
+            "username": profile.user.username,
+            "seller_status": profile.seller_status,
+            "is_seller": profile.is_seller,
+        })
+
+
+class AdminUnbanStoreView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        if not is_admin(request.user):
+            return Response({"detail": "Only admins can restore stores."}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get("user_id")
+        if not user_id:
+            return Response({"detail": "user_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        profile = UserProfile.objects.select_related("user").filter(user_id=user_id).first()
+        if not profile:
+            return Response({"detail": "Store not found."}, status=status.HTTP_404_NOT_FOUND)
+
+        if profile.seller_status != "banned":
+            return Response(
+                {"detail": "This store is not banned."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        profile.seller_status = "approved"
+        profile.is_seller = True
+        profile.save(update_fields=["seller_status", "is_seller", "updated_at"])
+
+        seller_group, _ = Group.objects.get_or_create(name="Seller")
+        profile.user.groups.add(seller_group)
+
+        return Response({
+            "detail": "Store restored and can sell again.",
+            "username": profile.user.username,
+            "seller_status": profile.seller_status,
+            "is_seller": profile.is_seller,
+        })
+
+
+class AdminOrdersView(generics.ListAPIView):
+    serializer_class = OrderSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if not is_admin(self.request.user):
+            return Order.objects.none()
+        return Order.objects.select_related("buyer").prefetch_related("items").order_by("-created_at")
+
+
+class AdminDashboardStatsView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_admin(request.user):
+            return Response(
+                {"detail": "Only admins can access dashboard stats."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        revenue_total = Order.objects.exclude(status="cancelled").aggregate(
+            total=Sum("total_price")
+        )["total"] or Decimal("0")
+
+        today = timezone.now().date()
+        order_volume = []
+        max_day_total = Decimal("0")
+
+        for offset in range(6, -1, -1):
+            day = today - timedelta(days=offset)
+            day_orders = Order.objects.filter(created_at__date=day)
+            day_total = day_orders.exclude(status="cancelled").aggregate(
+                total=Sum("total_price")
+            )["total"] or Decimal("0")
+            if day_total > max_day_total:
+                max_day_total = day_total
+            order_volume.append({
+                "date": day.isoformat(),
+                "label": day.strftime("%a"),
+                "total": float(day_total),
+                "orders": day_orders.count(),
+            })
+
+        low_stock_products = Product.objects.filter(stock__lte=5).order_by("stock", "name")[:8]
+
+        return Response({
+            "users_count": User.objects.count(),
+            "active_sellers": UserProfile.objects.filter(
+                is_seller=True,
+                seller_status="approved",
+            ).count(),
+            "pending_applications": UserProfile.objects.filter(seller_status="pending").count(),
+            "products_count": Product.objects.count(),
+            "orders_count": Order.objects.count(),
+            "revenue_total": str(revenue_total),
+            "low_stock_count": Product.objects.filter(stock__gt=0, stock__lte=5).count(),
+            "out_of_stock_count": Product.objects.filter(stock=0).count(),
+            "order_volume": order_volume,
+            "order_volume_max": float(max_day_total) if max_day_total > 0 else 1,
+            "low_stock_products": AdminLowStockProductSerializer(
+                low_stock_products,
+                many=True,
+            ).data,
+        })
+
+
+class AdminStoresListView(generics.ListAPIView):
+    serializer_class = AdminStoreSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if not is_admin(self.request.user):
+            return UserProfile.objects.none()
+
+        queryset = UserProfile.objects.filter(
+            seller_status__in=["approved", "banned"],
+        ).select_related("user").annotate(
+            product_count=Count("user__products", distinct=True),
+        ).order_by("store_name")
+
+        search = (self.request.query_params.get("q") or "").strip()
+        if search:
+            queryset = queryset.filter(
+                Q(store_name__icontains=search)
+                | Q(user__username__icontains=search)
+                | Q(contact_phone__icontains=search)
+                | Q(business_description__icontains=search)
+            )
+
+        return queryset
+
+
+class AdminStoreDetailView(generics.RetrieveAPIView):
+    serializer_class = AdminStoreDetailSerializer
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        if not is_admin(self.request.user):
+            return UserProfile.objects.none()
+
+        return UserProfile.objects.filter(
+            seller_status__in=["approved", "banned"],
+        ).select_related("user").annotate(
+            product_count=Count("user__products", distinct=True),
+        )
+
+    def get_object(self):
+        return get_object_or_404(self.get_queryset(), user_id=self.kwargs["user_id"])
+
+
+class OrderStatusUpdateView(generics.GenericAPIView):
+    serializer_class = OrderSerializer
+    permission_classes = [IsAuthenticated]
+
+    def patch(self, request, pk):
+        order = get_object_or_404(Order, pk=pk)
+        new_status = (request.data.get("status") or "").strip().lower()
+
+        if new_status not in dict(Order.STATUS_CHOICES):
+            return Response({"detail": "Invalid status."}, status=status.HTTP_400_BAD_REQUEST)
+
+        is_order_owner = order.buyer_id == request.user.id
+        is_seller_for_order = bool(order.items.filter(seller=request.user).exists())
+        if not (is_admin(request.user) or is_seller_for_order or (is_order_owner and new_status in {"delivered", "completed"})):
+            return Response({"detail": "You do not have permission to update this order."}, status=status.HTTP_403_FORBIDDEN)
+
+        allowed_transitions = {
+            "pending": {"confirmed", "cancelled"},
+            "confirmed": {"shipped", "cancelled"},
+            "shipped": {"delivered", "cancelled"},
+            "delivered": {"completed", "cancelled"},
+            "completed": set(),
+            "cancelled": set(),
+        }
+
+        if new_status not in allowed_transitions.get(order.status, set()):
+            return Response({"detail": f"Cannot move from {order.status} to {new_status}."}, status=status.HTTP_400_BAD_REQUEST)
+
+        with transaction.atomic():
+            locked_order = Order.objects.select_for_update().prefetch_related("items").get(pk=order.pk)
+            previous_status = locked_order.status
+
+            if new_status not in allowed_transitions.get(previous_status, set()):
+                return Response(
+                    {"detail": f"Cannot move from {previous_status} to {new_status}."},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if new_status == "cancelled" and previous_status != "cancelled":
+                restore_order_stock(locked_order)
+
+            locked_order.status = new_status
+            locked_order.save(update_fields=["status", "updated_at"])
+            order = locked_order
+
+        serializer_class = OrderSerializer
+        if is_seller(request.user) and not is_admin(request.user):
+            serializer_class = SellerOrderSerializer
+
+        return Response(serializer_class(order, context={"request": request}).data)
+
+
+class OrderDeliveryConfirmationView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request, pk):
+        order = get_object_or_404(Order, pk=pk)
+        if order.buyer_id != request.user.id:
+            return Response({"detail": "Only the customer who placed this order can confirm delivery."}, status=status.HTTP_403_FORBIDDEN)
+
+        if order.status == "shipped":
+            order.status = "delivered"
+        elif order.status == "delivered":
+            order.status = "completed"
+        else:
+            return Response({"detail": "This order cannot be confirmed yet."}, status=status.HTTP_400_BAD_REQUEST)
+
+        order.save(update_fields=["status", "updated_at"])
+        return Response(OrderSerializer(order).data)
 
 
 class ProductListCreateView(generics.ListCreateAPIView):
@@ -68,7 +429,10 @@ class ProductListCreateView(generics.ListCreateAPIView):
     )
 
     def get_queryset(self):
-        return super().get_queryset()
+        base = Product.objects.select_related("owner").prefetch_related("images")
+        if self.request.method in SAFE_METHODS:
+            return public_product_queryset(base)
+        return base
 
     def perform_create(self, serializer):
         user = self.request.user
@@ -99,7 +463,10 @@ class ProductDetailView(generics.RetrieveUpdateDestroyAPIView):
     )
 
     def get_queryset(self):
-        return super().get_queryset()
+        base = Product.objects.select_related("owner").prefetch_related("images")
+        if self.request.method in SAFE_METHODS and not is_admin(self.request.user):
+            return public_product_queryset(base)
+        return base
 
     def perform_update(self, serializer):
         product = serializer.save()
@@ -126,7 +493,11 @@ class ProfileView(generics.RetrieveUpdateAPIView):
 
 class ProductCommentListCreateView(generics.ListCreateAPIView):
     serializer_class = ProductCommentSerializer
-    permission_classes = [IsAuthenticated]
+
+    def get_permissions(self):
+        if self.request.method in SAFE_METHODS:
+            return [AllowAny()]
+        return [IsAuthenticated()]
 
     def get_queryset(self):
         return ProductComment.objects.filter(
@@ -148,65 +519,199 @@ class ProductImageDetailView(generics.DestroyAPIView):
 
     def delete(self, request, *args, **kwargs):
         obj = self.get_object()
-
-        # permission: admin or seller owner of the product
         user = request.user
-        if not (is_admin(user) or (is_seller(user) and getattr(obj.product, 'owner_id', None) == user.id)):
-            from rest_framework import status
-            return Response({'detail': 'You do not have permission to delete this image.'}, status=status.HTTP_403_FORBIDDEN)
+        if not (is_admin(user) or (is_seller(user) and getattr(obj.product, "owner_id", None) == user.id)):
+            return Response(
+                {"detail": "You do not have permission to delete this image."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
 
-        # delete file from storage then delete record
-        try:
-            if obj.image:
-                obj.image.delete(save=False)
-        except Exception:
-            pass
-
-        obj.delete()
-        from rest_framework import status
+        delete_image_instance(obj)
         return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+class CartView(generics.GenericAPIView):
+    """Server-side cart for authenticated shoppers."""
+    permission_classes = [IsAuthenticated]
+    serializer_class = CartSerializer
+
+    def get_cart(self):
+        cart, _ = Cart.objects.get_or_create(user=self.request.user)
+        return Cart.objects.prefetch_related(
+            "items__product__images",
+            "items__product__owner",
+        ).get(pk=cart.pk)
+
+    def get(self, request):
+        return Response(CartSerializer(self.get_cart()).data)
+
+    def post(self, request):
+        product_id = request.data.get("product_id")
+        if not product_id:
+            return Response({"detail": "product_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            quantity = max(1, int(request.data.get("quantity", 1)))
+        except (TypeError, ValueError):
+            return Response({"detail": "Invalid quantity."}, status=status.HTTP_400_BAD_REQUEST)
+
+        product = get_object_or_404(Product, pk=product_id)
+        cart, _ = Cart.objects.get_or_create(user=request.user)
+        item, created = CartItem.objects.get_or_create(
+            cart=cart,
+            product=product,
+            defaults={"quantity": quantity},
+        )
+
+        if not created:
+            next_qty = item.quantity + quantity
+            if product.stock:
+                next_qty = min(next_qty, product.stock)
+            item.quantity = next_qty
+            item.save(update_fields=["quantity"])
+        elif product.stock and item.quantity > product.stock:
+            item.quantity = product.stock
+            item.save(update_fields=["quantity"])
+
+        return Response(CartSerializer(self.get_cart()).data)
+
+    def patch(self, request):
+        product_id = request.data.get("product_id")
+        if not product_id:
+            return Response({"detail": "product_id is required."}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            quantity = int(request.data.get("quantity", 1))
+        except (TypeError, ValueError):
+            return Response({"detail": "Invalid quantity."}, status=status.HTTP_400_BAD_REQUEST)
+
+        if quantity <= 0:
+            return self._remove_item(product_id)
+
+        product = get_object_or_404(Product, pk=product_id)
+        cart, _ = Cart.objects.get_or_create(user=request.user)
+        item, _ = CartItem.objects.get_or_create(
+            cart=cart,
+            product=product,
+            defaults={"quantity": quantity},
+        )
+        next_qty = max(quantity, 1)
+        if product.stock:
+            next_qty = min(next_qty, product.stock)
+        item.quantity = next_qty
+        item.save(update_fields=["quantity"])
+        return Response(CartSerializer(self.get_cart()).data)
+
+    def delete(self, request):
+        product_id = request.data.get("product_id") or request.query_params.get("product_id")
+        if product_id:
+            return self._remove_item(product_id)
+
+        cart = Cart.objects.filter(user=request.user).first()
+        if cart:
+            cart.items.all().delete()
+        return Response(CartSerializer(self.get_cart()).data)
+
+    def _remove_item(self, product_id):
+        cart = Cart.objects.filter(user=self.request.user).first()
+        if cart:
+            CartItem.objects.filter(cart=cart, product_id=product_id).delete()
+        return Response(CartSerializer(self.get_cart()).data)
 
 
 class CheckoutView(generics.GenericAPIView):
     """
-    Handles cart checkout:
+    Handles cart checkout for guests and authenticated users.
     - Creates an Order with OrderItems
     - Decreases product stock
     - Validates stock availability
     """
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [OptionalJWTAuthentication]
+    permission_classes = [AllowAny]
     serializer_class = OrderSerializer
 
     def post(self, request):
         cart_items = request.data.get('items', [])
-        
-        if not cart_items:
+
+        quantities = aggregate_cart_quantities(cart_items if isinstance(cart_items, list) else [])
+
+        if not quantities:
             return Response(
                 {'detail': 'Cart is empty'},
                 status=status.HTTP_400_BAD_REQUEST
             )
 
+        customer_name = (request.data.get('customer_name') or '').strip()
+        customer_phone = (request.data.get('customer_phone') or '').strip()
+        customer_email = (request.data.get('customer_email') or '').strip()
+        shipping_address = (request.data.get('shipping_address') or '').strip()
+
+        if not request.user.is_authenticated:
+            if not customer_name:
+                return Response(
+                    {'detail': 'Customer name is required for guest checkout.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if not shipping_address:
+                return Response(
+                    {'detail': 'Shipping address is required for guest checkout.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            try:
+                customer_phone = clean_pk_phone(customer_phone, required=True)
+                customer_email = clean_email(customer_email, required=True)
+            except ValidationError as exc:
+                detail = exc.detail
+                if isinstance(detail, list):
+                    detail = detail[0]
+                if isinstance(detail, dict):
+                    return Response(detail, status=status.HTTP_400_BAD_REQUEST)
+                return Response(
+                    {"detail": str(detail)},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
         try:
             with transaction.atomic():
-                total_price = 0
                 order_items_data = []
+                total_price = 0
 
-                # Validate all items have sufficient stock
-                for item in cart_items:
-                    product_id = item.get('product_id')
-                    quantity = item.get('quantity', 1)
+                product_ids = sorted(quantities.keys())
+                products = {
+                    product.id: product
+                    for product in Product.objects.select_for_update().filter(id__in=product_ids)
+                }
 
-                    try:
-                        product = Product.objects.get(id=product_id)
-                    except Product.DoesNotExist:
+                for product_id in product_ids:
+                    quantity = quantities[product_id]
+                    product = products.get(product_id)
+
+                    if not product:
                         return Response(
                             {'detail': f'Product {product_id} not found'},
                             status=status.HTTP_404_NOT_FOUND
                         )
 
+                    owner_profile = getattr(product.owner, "profile", None) if product.owner_id else None
+                    if owner_profile and owner_profile.seller_status == "banned":
+                        return Response(
+                            {
+                                'detail': (
+                                    f'{product.name} is unavailable — '
+                                    'this store has been suspended by admin.'
+                                )
+                            },
+                            status=status.HTTP_400_BAD_REQUEST,
+                        )
+
                     if product.stock < quantity:
                         return Response(
-                            {'detail': f'Insufficient stock for {product.name}. Available: {product.stock}'},
+                            {
+                                'detail': (
+                                    f'Insufficient stock for {product.name}. '
+                                    f'Available: {product.stock}, requested: {quantity}'
+                                )
+                            },
                             status=status.HTTP_400_BAD_REQUEST
                         )
 
@@ -219,14 +724,18 @@ class CheckoutView(generics.GenericAPIView):
 
                     total_price += float(product.price) * quantity
 
-                # Create order
+                buyer = request.user if request.user.is_authenticated else None
+
                 order = Order.objects.create(
-                    buyer=request.user,
-                    status='completed',
+                    buyer=buyer,
+                    customer_name=customer_name,
+                    customer_phone=customer_phone,
+                    customer_email=customer_email,
+                    shipping_address=shipping_address,
+                    status='pending',
                     total_price=total_price
                 )
 
-                # Create order items and decrease stock
                 for item_data in order_items_data:
                     product = item_data['product']
                     quantity = item_data['quantity']
@@ -239,9 +748,12 @@ class CheckoutView(generics.GenericAPIView):
                         seller=product.owner
                     )
 
-                    # Decrease product stock
-                    product.stock -= quantity
-                    product.save(update_fields=['stock'])
+                    deduct_product_stock(product, quantity)
+
+                if request.user.is_authenticated:
+                    cart = Cart.objects.filter(user=request.user).first()
+                    if cart:
+                        cart.items.all().delete()
 
                 serializer = self.get_serializer(order)
                 return Response(serializer.data, status=status.HTTP_201_CREATED)
@@ -253,18 +765,86 @@ class CheckoutView(generics.GenericAPIView):
             )
 
 
+class OrderTrackView(generics.GenericAPIView):
+    """
+    Public order lookup by order number.
+    Returns status metadata only — no customer or line-item details.
+    """
+    permission_classes = [AllowAny]
+    authentication_classes = [OptionalJWTAuthentication]
+    serializer_class = OrderTrackSerializer
+
+    def _parse_order_id(self, value):
+        if value is None or value == "":
+            return None
+
+        cleaned = str(value).strip().lstrip("#")
+        try:
+            return int(cleaned)
+        except (TypeError, ValueError):
+            return None
+
+    def _lookup(self, order_id):
+        if not order_id:
+            return None
+        return Order.objects.filter(pk=order_id).only(
+            "id",
+            "status",
+            "created_at",
+            "updated_at",
+        ).first()
+
+    def get(self, request):
+        order_id = self._parse_order_id(
+            request.query_params.get("order_id") or request.query_params.get("order")
+        )
+        if not order_id:
+            return Response(
+                {"detail": "Order number is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order = self._lookup(order_id)
+        if not order:
+            return Response(
+                {"detail": "Order not found. Check the order number and try again."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(self.get_serializer(order).data)
+
+    def post(self, request):
+        order_id = self._parse_order_id(
+            request.data.get("order_id") or request.data.get("order")
+        )
+        if not order_id:
+            return Response(
+                {"detail": "Order number is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        order = self._lookup(order_id)
+        if not order:
+            return Response(
+                {"detail": "Order not found. Check the order number and try again."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        return Response(self.get_serializer(order).data)
+
+
 class OrderListView(generics.ListAPIView):
-    """Get all orders for the authenticated user (buyer)"""
+    """Get all orders placed by the authenticated user."""
     serializer_class = OrderSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        return Order.objects.filter(buyer=self.request.user).prefetch_related('items')
+        return Order.objects.filter(buyer=self.request.user).prefetch_related('items').order_by('-created_at')
 
 
 class SellerOrdersView(generics.ListAPIView):
     """Get all orders containing items sold by the authenticated seller"""
-    serializer_class = OrderSerializer
+    serializer_class = SellerOrderSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
@@ -275,7 +855,10 @@ class SellerOrdersView(generics.ListAPIView):
         # Get all orders that contain items sold by this seller
         return Order.objects.filter(
             items__seller=self.request.user
-        ).distinct().prefetch_related('items')
+        ).distinct().select_related("buyer").prefetch_related(
+            "items__product",
+            "items__seller",
+        ).order_by("-created_at")
 
 
 class SellerProductsView(generics.ListAPIView):
@@ -289,3 +872,115 @@ class SellerProductsView(generics.ListAPIView):
             return Product.objects.none()
 
         return Product.objects.filter(owner=self.request.user).select_related("owner")
+
+
+class SellerDashboardStatsView(generics.GenericAPIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        if not is_seller(request.user):
+            return Response(
+                {"detail": "Only sellers can access dashboard stats."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        seller = request.user
+        profile = getattr(seller, "profile", None)
+        store_name = (getattr(profile, "store_name", "") or seller.username).strip()
+
+        seller_products = Product.objects.filter(owner=seller)
+        products_count = seller_products.count()
+        total_stock = seller_products.aggregate(total=Sum("stock"))["total"] or 0
+        inventory_value = seller_products.aggregate(
+            total=Sum(F("price") * F("stock"))
+        )["total"] or Decimal("0")
+
+        line_total = F("price") * F("quantity")
+        sold_items = OrderItem.objects.filter(seller=seller).exclude(order__status="cancelled")
+
+        revenue_total = sold_items.aggregate(total=Sum(line_total))["total"] or Decimal("0")
+
+        seller_orders = Order.objects.filter(items__seller=seller).distinct()
+        orders_count = seller_orders.count()
+        pending_orders_count = seller_orders.filter(status="pending").count()
+        active_orders_count = seller_orders.filter(
+            status__in=["confirmed", "shipped", "delivered"]
+        ).count()
+        completed_orders_count = seller_orders.filter(status="completed").count()
+        cancelled_orders_count = seller_orders.filter(status="cancelled").count()
+
+        today = timezone.now().date()
+        order_volume = []
+        max_day_total = Decimal("0")
+
+        for offset in range(6, -1, -1):
+            day = today - timedelta(days=offset)
+            day_items = sold_items.filter(order__created_at__date=day)
+            day_total = day_items.aggregate(total=Sum(line_total))["total"] or Decimal("0")
+            if day_total > max_day_total:
+                max_day_total = day_total
+            order_volume.append({
+                "date": day.isoformat(),
+                "label": day.strftime("%a"),
+                "total": float(day_total),
+                "orders": day_items.values("order_id").distinct().count(),
+            })
+
+        status_breakdown = [
+            {
+                "status": status_key,
+                "label": label,
+                "count": seller_orders.filter(status=status_key).count(),
+            }
+            for status_key, label in Order.STATUS_CHOICES
+        ]
+        status_max = max((entry["count"] for entry in status_breakdown), default=0)
+
+        low_stock_products = seller_products.filter(stock__gt=0, stock__lte=5).order_by("stock", "name")[:8]
+        out_of_stock_products = seller_products.filter(stock=0).order_by("name")[:8]
+
+        top_products_qs = (
+            sold_items.values("product_id", "product__name")
+            .annotate(
+                units_sold=Sum("quantity"),
+                revenue=Sum(line_total),
+            )
+            .order_by("-units_sold")[:5]
+        )
+        top_products = [
+            {
+                "product_id": row["product_id"],
+                "name": row["product__name"] or "Unknown product",
+                "units_sold": row["units_sold"] or 0,
+                "revenue": str(row["revenue"] or Decimal("0")),
+            }
+            for row in top_products_qs
+        ]
+
+        return Response({
+            "store_name": store_name,
+            "products_count": products_count,
+            "total_stock": total_stock,
+            "inventory_value": str(inventory_value),
+            "revenue_total": str(revenue_total),
+            "orders_count": orders_count,
+            "pending_orders_count": pending_orders_count,
+            "active_orders_count": active_orders_count,
+            "completed_orders_count": completed_orders_count,
+            "cancelled_orders_count": cancelled_orders_count,
+            "low_stock_count": seller_products.filter(stock__gt=0, stock__lte=5).count(),
+            "out_of_stock_count": seller_products.filter(stock=0).count(),
+            "order_volume": order_volume,
+            "order_volume_max": float(max_day_total) if max_day_total > 0 else 1,
+            "status_breakdown": status_breakdown,
+            "status_breakdown_max": status_max if status_max > 0 else 1,
+            "low_stock_products": AdminLowStockProductSerializer(
+                low_stock_products,
+                many=True,
+            ).data,
+            "out_of_stock_products": AdminLowStockProductSerializer(
+                out_of_stock_products,
+                many=True,
+            ).data,
+            "top_products": top_products,
+        })

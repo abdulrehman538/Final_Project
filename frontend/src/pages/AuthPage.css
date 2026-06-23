@@ -1,3 +1,366 @@
+/* Portal — full-page seller / admin access */
+.portal-auth {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  background: #e8a87c;
+}
+
+.portal-auth::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  background:
+    radial-gradient(
+      ellipse 90% 80% at 50% 42%,
+      rgba(255, 255, 255, 0.58) 0%,
+      rgba(255, 252, 248, 0.22) 48%,
+      transparent 72%
+    ),
+    linear-gradient(
+      145deg,
+      rgba(245, 114, 36, 0.38) 0%,
+      rgba(234, 88, 12, 0.28) 42%,
+      rgba(180, 83, 9, 0.42) 100%
+    ),
+    url("../assets/images/portal-shopping-bg.jpg") center center / cover no-repeat;
+  pointer-events: none;
+}
+
+.portal-auth__header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 32px;
+  background: rgba(255, 255, 255, 0.94);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(226, 232, 240, 0.8);
+  flex-shrink: 0;
+}
+
+.portal-auth__brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.portal-auth__brand strong {
+  display: block;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.portal-auth__brand span {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--muted);
+  margin-top: 2px;
+}
+
+.portal-auth__logo {
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  object-fit: contain;
+}
+
+.portal-auth__market-link {
+  border: 1px solid var(--border);
+  background: #fff;
+  color: var(--text);
+  font-size: 0.88rem;
+  font-weight: 600;
+  padding: 10px 16px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s ease, border-color 0.15s ease;
+}
+
+.portal-auth__market-link:hover {
+  background: var(--surface-soft);
+  border-color: rgba(245, 114, 36, 0.35);
+}
+
+.portal-auth__main {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 32px 24px 48px;
+}
+
+.portal-auth__panel {
+  width: 100%;
+  background: #fff;
+  border-radius: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  box-shadow:
+    0 24px 64px rgba(0, 0, 0, 0.35),
+    0 8px 24px rgba(0, 0, 0, 0.2);
+  overflow: hidden;
+}
+
+.portal-auth__panel--signin {
+  max-width: 440px;
+  padding: 28px 32px 24px;
+}
+
+.portal-auth__panel--application {
+  max-width: 720px;
+}
+
+.portal-auth__tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border);
+  background: #fafbfc;
+}
+
+.portal-auth__tab {
+  flex: 1;
+  padding: 16px 20px;
+  border: none;
+  background: transparent;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.portal-auth__tab.is-active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  background: #fff;
+}
+
+.portal-application__intro {
+  padding: 24px 28px 18px;
+  border-bottom: 1px solid var(--border);
+  background: #fff;
+}
+
+.portal-application__intro h1 {
+  margin: 0 0 8px;
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.portal-application__intro p {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 62ch;
+}
+
+.portal-auth__form {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.portal-auth__form--application {
+  padding: 20px 28px 24px;
+}
+
+.portal-auth__panel--signin .portal-auth__form {
+  padding-top: 8px;
+}
+
+.portal-signin-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.portal-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px 20px;
+}
+
+.portal-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.portal-field--full {
+  grid-column: 1 / -1;
+}
+
+.portal-input {
+  min-height: 44px !important;
+  padding: 11px 14px !important;
+  border-radius: 10px !important;
+  font-size: 0.92rem !important;
+}
+
+.portal-textarea {
+  min-height: 120px !important;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.portal-application__body {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.portal-application__columns {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+
+.portal-application__block {
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fafbfc;
+}
+
+.portal-application__block-title {
+  margin: 0 0 6px;
+  font-size: 0.95rem;
+  font-weight: 800;
+  color: var(--text);
+  letter-spacing: 0.01em;
+}
+
+.portal-application__block-desc {
+  margin: 0 0 18px;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
+.portal-application__agreement {
+  padding: 22px 24px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #fff;
+}
+
+.portal-agreement__document {
+  margin-bottom: 16px;
+  padding: 18px 20px;
+  border-radius: 10px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+  font-size: 0.84rem;
+  line-height: 1.65;
+  color: #475569;
+}
+
+.portal-agreement__document p {
+  margin: 0 0 12px;
+}
+
+.portal-agreement__document p:last-child {
+  margin-bottom: 0;
+}
+
+.portal-agreement__document strong {
+  color: var(--text);
+  font-weight: 700;
+}
+
+.portal-agreement__accept {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 0.84rem;
+  line-height: 1.5;
+  color: var(--text);
+}
+
+.signup-steps--portal {
+  margin-bottom: 24px;
+  background: #f8fafc;
+  border: 1px solid var(--border);
+}
+
+.portal-auth__footer {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--border);
+}
+
+.portal-auth__actions {
+  display: flex;
+  gap: 12px;
+}
+
+.portal-auth__actions .btn {
+  flex: 1;
+  min-height: 46px;
+  font-weight: 700;
+}
+
+.portal-auth__actions .btn-primary {
+  flex: 2;
+}
+
+.portal-auth__switch {
+  margin: 16px 0 0;
+  text-align: center;
+  font-size: 0.88rem;
+  color: var(--muted);
+}
+
+.portal-auth__switch button {
+  background: none;
+  border: none;
+  color: var(--primary);
+  font-weight: 700;
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+@media (max-width: 860px) {
+  .portal-application__columns {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-form-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .portal-auth__form--application,
+  .portal-application__intro {
+    padding-left: 20px;
+    padding-right: 20px;
+  }
+}
+
+@media (max-width: 600px) {
+  .portal-auth__header {
+    padding: 12px 16px;
+  }
+
+  .portal-auth__main {
+    padding: 16px 12px 32px;
+  }
+
+  .portal-auth__panel--signin {
+    padding: 20px 18px;
+  }
+}
+
+/* Legacy split layout (unused on /portal) */
 .auth-shell {
   min-height: 100vh;
   display: grid;
@@ -9,7 +372,7 @@
   position: relative;
   background:
     linear-gradient(135deg, rgba(245, 114, 36, 0.88), rgba(234, 88, 12, 0.68)),
-    url("https://images.unsplash.com/photo-1483985988355-763728e1935b?auto=format&fit=crop&w=1600&q=80")
+    url("../assets/images/auth-promo.jpg")
       center center / cover no-repeat;
   color: #fff;
   overflow: hidden;
@@ -212,16 +575,189 @@
   }
 }
 
-@media (max-width: 700px) {
-  .auth-panel {
-    padding: 14px;
-  }
-
-  .auth-copy h2 {
-    font-size: 1.8rem;
-  }
-
+.auth-tabs--seller-signup {
+  width: min(720px, 100%);
 }
+
+.auth-card--seller-signup {
+  width: min(720px, 100%);
+  max-width: 100%;
+  padding: 36px 40px 32px;
+}
+
+.seller-signup-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.seller-signup-intro {
+  margin-bottom: 4px;
+}
+
+.seller-signup-intro h3 {
+  margin: 0 0 8px;
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--text);
+}
+
+.seller-signup-intro p {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.55;
+  color: var(--muted);
+  max-width: 56ch;
+}
+
+.seller-signup-section {
+  padding: 20px 22px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: var(--surface-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.seller-signup-section--terms {
+  background: linear-gradient(180deg, #fff9f5 0%, #fff 100%);
+  border-color: rgba(245, 114, 36, 0.22);
+}
+
+.seller-signup-section__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+}
+
+.seller-signup-section__icon {
+  min-width: 48px;
+  height: 40px;
+  padding: 0 10px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, #f57224, #ff8f3c);
+  border: none;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.seller-signup-section__head h4 {
+  margin: 0 0 4px;
+  font-size: 1rem;
+  font-weight: 800;
+}
+
+.seller-signup-section__head p {
+  margin: 0;
+  font-size: 0.84rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.seller-signup-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.seller-signup-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 16px;
+}
+
+.seller-signup-field--full {
+  grid-column: 1 / -1;
+}
+
+.seller-signup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.seller-signup-input {
+  min-height: 46px !important;
+  padding: 12px 14px !important;
+  border-radius: 12px !important;
+  font-size: 0.94rem !important;
+}
+
+.seller-signup-textarea {
+  min-height: 108px !important;
+  resize: vertical;
+  line-height: 1.5;
+}
+
+.seller-terms-panel {
+  padding: 16px 18px;
+  border-radius: 14px;
+  background: #fff;
+  border: 1px solid rgba(245, 114, 36, 0.15);
+  font-size: 0.88rem;
+  line-height: 1.55;
+  color: var(--text);
+}
+
+.seller-terms-panel p {
+  margin: 0 0 12px;
+}
+
+.seller-terms-panel ul {
+  margin: 0;
+  padding-left: 1.2rem;
+  display: grid;
+  gap: 8px;
+}
+
+.seller-terms-panel li {
+  color: var(--muted);
+}
+
+.seller-terms-panel strong {
+  color: var(--text);
+}
+
+.seller-checkbox--signup {
+  margin-top: 4px;
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #fff;
+  border: 1px solid var(--border);
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 0.88rem;
+  line-height: 1.45;
+}
+
+.seller-checkbox--signup span {
+  color: var(--text);
+}
+
+@media (max-width: 700px) {
+  .auth-card--seller-signup {
+    padding: 24px 20px;
+  }
+
+  .seller-signup-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 1200px) {
+  .auth-shell.auth-shell--seller-signup-wide .auth-promo {
+    min-height: 280px;
+  }
+}
+
 
 /* 2-Stage Signup Steps Styles */
 .signup-steps {

@@ -1,27 +1,28 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { demoCategories } from "../data/demoProducts";
+import { getProductMeta, resolveProductImage } from "../utils/productImage";
+import "./Marketplace.css";
 
-const valueProps = [
-  { label: "Fast Delivery", value: "24-48h" },
-  { label: "Secure Checkout", value: "Protected" },
-  { label: "Buyer Support", value: "7 days a week" },
+const TRUST_ITEMS = [
+  { icon: "⚡", title: "Fast delivery", text: "24–48 hour dispatch" },
+  { icon: "🛡️", title: "COD checkout", text: "Pay when it arrives" },
+  { icon: "💬", title: "Live support", text: "Help 7 days a week" },
 ];
 
-function getProductMeta(product) {
-  const safeName = String(product?.name || "");
-  const seed = String(product?.id || safeName).length;
-  const storeNames = ["Nova Store", "Prime Mart", "Bazaar Hub", "Urban Goods"];
-  const store = product?.store_name || storeNames[seed % storeNames.length];
-  const rating = (4.1 + (seed % 8) * 0.1).toFixed(1);
-  const stock = Number.isFinite(Number(product?.stock)) ? Number(product.stock) : 12 + (seed % 18);
-  const category = product?.category || "General";
-  const badge = stock > 10 ? "In Stock" : stock > 0 ? "Low Stock" : "Out of Stock";
-
-  return { store, rating, stock, category, badge };
+function ProductSkeleton() {
+  return (
+    <div className="mp-skeleton-card">
+      <div className="mp-skeleton-image" />
+      <div className="mp-skeleton-body">
+        <div className="mp-skeleton-line mp-skeleton-line--short" />
+        <div className="mp-skeleton-line" />
+        <div className="mp-skeleton-line" />
+      </div>
+    </div>
+  );
 }
 
-function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [], isAuthenticated = false }) {
+function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [] }) {
   const navigate = useNavigate();
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -30,7 +31,51 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [], 
   const [activeCategory, setActiveCategory] = useState("All");
   const [sortBy, setSortBy] = useState("featured");
   const [onlyInStock, setOnlyInStock] = useState(false);
-  const token = localStorage.getItem("accessToken");
+  const spotlightTrackRef = useRef(null);
+  const [spotlightScroll, setSpotlightScroll] = useState({
+    canScrollLeft: false,
+    canScrollRight: false,
+    isScrollable: false,
+  });
+
+  const updateSpotlightScroll = useCallback(() => {
+    const track = spotlightTrackRef.current;
+    if (!track) return;
+
+    const maxScroll = track.scrollWidth - track.clientWidth;
+    const isScrollable = maxScroll > 4;
+
+    setSpotlightScroll({
+      isScrollable,
+      canScrollLeft: isScrollable && track.scrollLeft > 4,
+      canScrollRight: isScrollable && track.scrollLeft < maxScroll - 4,
+    });
+  }, []);
+
+  const scrollSpotlight = (direction) => {
+    const track = spotlightTrackRef.current;
+    if (!track) return;
+
+    const card = track.querySelector(".mp-deal-card");
+    const gap = 12;
+    const amount = card ? card.offsetWidth + gap : 252;
+
+    track.scrollBy({
+      left: direction * amount,
+      behavior: "smooth",
+    });
+  };
+
+  useEffect(() => {
+    const savedQuery = localStorage.getItem("marketplaceSearch") || "";
+    if (savedQuery) {
+      setQuery(savedQuery);
+    }
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("marketplaceSearch", query);
+  }, [query]);
 
   useEffect(() => {
     const loadProducts = async () => {
@@ -38,14 +83,7 @@ function Marketplace({ onAddToCart, onToggleWishlist, wishlist = [], cart = [], 
       setError("");
 
       try {
-const headers = {};
-      if (token) {
-        headers.Authorization = `Bearer ${token}`;
-      }
-
-      const response = await fetch("http://127.0.0.1:8000/api/products/", {
-        headers,
-        });
+        const response = await fetch("http://127.0.0.1:8000/api/products/");
 
         if (!response.ok) {
           throw new Error(`Failed to fetch products (${response.status})`);
@@ -53,14 +91,14 @@ const headers = {};
 
         const data = await response.json();
         const fetchedProducts = Array.isArray(data) ? data : [];
-        
+
         if (fetchedProducts.length === 0) {
-          setError("No products available at the moment. Check back soon!");
+          setError("No products available yet. Sellers are still stocking their stores.");
         }
-        
+
         setProducts(fetchedProducts);
       } catch (err) {
-        setError(err.message || "Unable to fetch products. Please try again later.");
+        setError(err.message || "Unable to load products right now.");
         setProducts([]);
       } finally {
         setLoading(false);
@@ -68,15 +106,11 @@ const headers = {};
     };
 
     loadProducts();
-  }, [token]);
+  }, []);
 
-  const featuredProducts = useMemo(() => products.slice(0, 4), [products]);
-  const trendingProducts = useMemo(() => products.slice(0, 9), [products]);
-
-  // Dynamically generate categories from products
   const uniqueCategories = useMemo(() => {
     const categories = new Set();
-    products.forEach(product => {
+    products.forEach((product) => {
       if (product.category) {
         categories.add(product.category);
       }
@@ -84,292 +118,395 @@ const headers = {};
     return Array.from(categories).sort();
   }, [products]);
 
+  const enrichedProducts = useMemo(
+    () => products.map((product) => ({ ...product, meta: getProductMeta(product) })),
+    [products]
+  );
+
   const visibleProducts = useMemo(() => {
     const normalizedQuery = query.trim().toLowerCase();
 
-    const filtered = products
-      .map((product) => ({ ...product, meta: getProductMeta(product) }))
-      .filter((product) => {
-        const productName = String(product?.name || "").toLowerCase();
-        const matchesQuery =
-          !normalizedQuery ||
-          productName.includes(normalizedQuery) ||
-          String(product.meta.store || "").toLowerCase().includes(normalizedQuery);
-        const matchesCategory = activeCategory === "All" || product.meta.category === activeCategory;
-        const matchesStock = !onlyInStock || product.meta.stock > 0;
+    const filtered = enrichedProducts.filter((product) => {
+      const productName = String(product?.name || "").toLowerCase();
+      const productDescription = String(product?.description || "").toLowerCase();
+      const matchesQuery =
+        !normalizedQuery ||
+        productName.includes(normalizedQuery) ||
+        productDescription.includes(normalizedQuery) ||
+        String(product.meta.store || "").toLowerCase().includes(normalizedQuery) ||
+        String(product.meta.category || "").toLowerCase().includes(normalizedQuery);
+      const matchesCategory =
+        activeCategory === "All" || product.meta.category === activeCategory;
+      const matchesStock = !onlyInStock || product.meta.stock > 0;
 
-        return matchesQuery && matchesCategory && matchesStock;
-      });
+      return matchesQuery && matchesCategory && matchesStock;
+    });
 
     if (sortBy === "price-low") {
-      return filtered.sort((a, b) => Number(a.price || 0) - Number(b.price || 0));
+      return [...filtered].sort((a, b) => Number(a.price || 0) - Number(b.price || 0));
     }
 
     if (sortBy === "price-high") {
-      return filtered.sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
+      return [...filtered].sort((a, b) => Number(b.price || 0) - Number(a.price || 0));
     }
 
     if (sortBy === "rating") {
-      return filtered.sort((a, b) => Number(b.meta.rating) - Number(a.meta.rating));
+      return [...filtered].sort((a, b) => Number(b.meta.rating) - Number(a.meta.rating));
     }
 
     return filtered;
-  }, [products, query, activeCategory, onlyInStock, sortBy]);
+  }, [enrichedProducts, query, activeCategory, onlyInStock, sortBy]);
+
+  const heroProducts = useMemo(() => enrichedProducts.slice(0, 3), [enrichedProducts]);
+  const spotlightProducts = useMemo(() => enrichedProducts.slice(3, 11), [enrichedProducts]);
+
+  useEffect(() => {
+    updateSpotlightScroll();
+
+    const track = spotlightTrackRef.current;
+    if (!track) return undefined;
+
+    const handleScroll = () => updateSpotlightScroll();
+    track.addEventListener("scroll", handleScroll, { passive: true });
+
+    const handleWheel = (event) => {
+      const maxScroll = track.scrollWidth - track.clientWidth;
+      if (maxScroll <= 0) return;
+
+      const delta =
+        Math.abs(event.deltaX) > Math.abs(event.deltaY)
+          ? event.deltaX
+          : event.shiftKey
+            ? event.deltaY
+            : 0;
+
+      if (!delta) return;
+
+      const nextScroll = track.scrollLeft + delta;
+      const clamped = Math.max(0, Math.min(maxScroll, nextScroll));
+
+      if (clamped !== track.scrollLeft) {
+        track.scrollLeft = clamped;
+        updateSpotlightScroll();
+        event.preventDefault();
+        return;
+      }
+
+      if (
+        (delta > 0 && track.scrollLeft >= maxScroll - 1) ||
+        (delta < 0 && track.scrollLeft <= 0)
+      ) {
+        event.preventDefault();
+      }
+    };
+
+    track.addEventListener("wheel", handleWheel, { passive: false });
+
+    const resizeObserver = new ResizeObserver(() => updateSpotlightScroll());
+    resizeObserver.observe(track);
+
+    return () => {
+      track.removeEventListener("scroll", handleScroll);
+      track.removeEventListener("wheel", handleWheel);
+      resizeObserver.disconnect();
+    };
+  }, [spotlightProducts, updateSpotlightScroll]);
 
   const handleProductClick = (product) => {
     navigate(`/product/${product.id}`, { state: { product } });
   };
 
-  const userRole = (localStorage.getItem("userRole") || "buyer").toLowerCase();
-  const isBuyer = userRole === "buyer";
+  const handleSearchSubmit = (event) => {
+    event.preventDefault();
+    document.getElementById("catalog-section")?.scrollIntoView({ behavior: "smooth" });
+  };
 
   return (
-    <div className="marketplace-layout">
-      <section className="market-hero card">
-        <div className="market-hero-copy">
-          <p className="eyebrow"> marketplace</p>
-          <h2 className="market-title">Find products, follow stores, and check out in a few clicks.</h2>
-          <p className="subtext">
-            Browse a cleaner storefront experience with featured deals, categorized discovery, cart actions,
-            and an interface that feels production-ready.
+    <div className="mp-page">
+      <section className="mp-hero">
+        <div className="mp-hero__copy">
+          <p className="mp-hero__eyebrow">CArTGo Marketplace</p>
+          <h1 className="mp-hero__title">Discover products you will actually want to buy.</h1>
+          <p className="mp-hero__text">
+            Curated listings from real sellers, real images, and checkout in minutes — no account required.
           </p>
 
-          <div className="market-hero-actions">
-            <button type="button" className="btn btn-primary" onClick={() => navigate("/marketplace")}> 
-              Shop Now
-            </button>
-            {isBuyer && (
-              <button type="button" className="btn btn-secondary" onClick={() => navigate("/profile")}>
-                Become a Seller
-              </button>
-            )}
-          </div>
+          <form className="mp-hero__search" onSubmit={handleSearchSubmit}>
+            <input
+              type="search"
+              placeholder="Search products, stores, or categories"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search marketplace"
+            />
+            <button type="submit">Search</button>
+          </form>
 
-          <div className="value-props">
-            {valueProps.map((item) => (
-              <div className="value-prop" key={item.label}>
-                <strong>{item.value}</strong>
-                <span>{item.label}</span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="market-hero-panel">
-          <div className="hero-badge">Top Deals</div>
-          <div className="hero-card hero-card--accent">
-            <p>Flash sale</p>
-            <strong>Up to 40% off</strong>
-            <span>On selected marketplace essentials</span>
-          </div>
-          <div className="hero-card">
-            <p>Buyer's protection</p>
-            <strong>Secure payments</strong>
-            <span>Trusted checkout and order tracking</span>
-          </div>
-        </div>
-      </section>
-
-      <section className="category-strip">
-        <div className="section-heading">
-          <div>
-            <p className="eyebrow">Categories</p>
-            <h3>Shop by category</h3>
-          </div>
-          <span className="pill">{uniqueCategories.length} categories</span>
-        </div>
-
-        <div className="category-grid">
-          <button type="button" className={`category-card${activeCategory === "All" ? " is-active" : ""}`} onClick={() => setActiveCategory("All")}>
-            All
-          </button>
-          {uniqueCategories.map((category) => (
+          <div className="mp-hero__actions">
             <button
               type="button"
-              key={category}
-              className={`category-card${activeCategory === category ? " is-active" : ""}`}
-              onClick={() => setActiveCategory(category)}
+              className="mp-hero__cta"
+              onClick={() => navigate("/portal")}
             >
-              {category}
+              Become a Seller
             </button>
-          ))}
+            <button
+              type="button"
+              className="mp-hero__cta mp-hero__cta--ghost"
+              onClick={() => navigate("/track-order")}
+            >
+              Track order
+            </button>
+          </div>
         </div>
+
+        {heroProducts.length > 0 && (
+          <div className="mp-hero__mosaic" aria-hidden={heroProducts.length === 0}>
+            {heroProducts.map((product, index) => (
+              <button
+                type="button"
+                key={product.id}
+                className={`mp-hero__mosaic-item${index === 0 ? " mp-hero__mosaic-item--main" : ""}`}
+                onClick={() => handleProductClick(product)}
+              >
+                <img src={resolveProductImage(product, "800x800")} alt={product.name} />
+              </button>
+            ))}
+          </div>
+        )}
       </section>
 
-      <section className="market-grid">
-        <aside className="market-filters card">
-          <div className="section-heading">
+      {!loading && spotlightProducts.length > 0 && (
+        <section className="mp-deals">
+          <div className="mp-section-head">
             <div>
-              <p className="eyebrow">Filters</p>
-              <h3>Refine results</h3>
+              <h2>Spotlight</h2>
+              <p>Fresh listings worth a closer look before you browse categories.</p>
             </div>
           </div>
 
-          <label className="field-label">Search</label>
-          <input
-            className="field-input"
-            type="search"
-            placeholder="Search products"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-          />
-
-          <label className="field-label" style={{ marginTop: 18 }}>Sort by</label>
-          <select className="field-input" value={sortBy} onChange={(e) => setSortBy(e.target.value)}>
-            <option value="featured">Featured</option>
-            <option value="price-low">Price: Low to High</option>
-            <option value="price-high">Price: High to Low</option>
-            <option value="rating">Top Rated</option>
-          </select>
-
-          <label className="filter-check">
-            <input type="checkbox" checked={onlyInStock} onChange={(e) => setOnlyInStock(e.target.checked)} />
-            <span>In stock only</span>
-          </label>
-
-          <div className="filter-summary">
-            <span>Wishlist items</span>
-            <strong>{wishlist.length}</strong>
-          </div>
-          <div className="filter-summary">
-            <span>Cart items</span>
-            <strong>{cart.reduce((sum, item) => sum + item.quantity, 0)}</strong>
-          </div>
-        </aside>
-
-        <div className="market-results">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">Featured</p>
-              <h3>Popular picks</h3>
-            </div>
-            <span className="pill">{featuredProducts.length} featured</span>
-          </div>
-
-          <div style={{ display: "grid", gap: "18px", gridTemplateColumns: "1fr auto" }}>
-            <div className="featured-row">
-              {featuredProducts.map((product) => {
-                const meta = getProductMeta(product);
-                return (
-                  <article className="featured-card" key={product.id} onClick={() => handleProductClick(product)}>
-                    <div className="featured-art">Deal</div>
-                    <div>
-                      <h4>{product.name}</h4>
-                      <p className="subtext">{meta.store}</p>
-                      <strong>${Number(product.price || 0).toFixed(2)}</strong>
-                    </div>
-                  </article>
-                );
-              })}
-            </div>
-
-            <div style={{ display: "grid", gap: "12px", width: "320px", maxHeight: "500px", overflowY: "auto" }}>
-              <div style={{ paddingBottom: "8px", borderBottom: "1px solid rgba(229, 231, 235, 0.95)" }}>
-                <p className="eyebrow" style={{ margin: "0 0 4px 0" }}>Trending Now</p>
-                <h4 style={{ margin: "0" }}>Recommended for You</h4>
-              </div>
-              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: "12px" }}>
-                {trendingProducts.map((product, index) => {
-                  const meta = getProductMeta(product);
-                  const firstImage = (product.images && product.images[0] && product.images[0].image) || product.image_url;
-                  const resolvedImage = firstImage ? (firstImage.startsWith("/") ? `http://127.0.0.1:8000${firstImage}` : firstImage) : null;
-                  const image =
-                    resolvedImage ||
-                    `https://placehold.co/600x600/fdf2e8/f57224?text=${encodeURIComponent(String(product.name || "Product").slice(0, 12))}`;
-
-                  return (
-                    <div
-                      key={product.id}
-                      onClick={() => handleProductClick(product)}
-                      style={{
-                        padding: "10px",
-                        borderRadius: "12px",
-                        background: "var(--surface)",
-                        border: "1px solid rgba(229, 231, 235, 0.95)",
-                        cursor: "pointer",
-                        transition: "all 180ms ease",
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.boxShadow = "0 8px 16px rgba(17, 24, 39, 0.1)";
-                        e.currentTarget.style.transform = "translateY(-1px)";
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.boxShadow = "none";
-                        e.currentTarget.style.transform = "translateY(0)";
-                      }}
-                    >
-                      <img
-                        src={image}
-                        alt={product.name}
-                        style={{ width: "100%", height: "100px", objectFit: "cover", borderRadius: "8px", marginBottom: "6px" }}
-                      />
-                      <h5 style={{ margin: "0", fontSize: "0.85rem", fontWeight: "600", lineHeight: "1.2" }}>{product.name}</h5>
-                      <p style={{ margin: "4px 0", fontSize: "0.75rem", color: "var(--text-secondary)" }}>{meta.store}</p>
-                      <strong style={{ fontSize: "0.9rem", color: "var(--primary)" }}>${Number(product.price || 0).toFixed(2)}</strong>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          </div>
-
-          <div className="product-grid">
-            {loading ? (
-              <div className="empty-state product-empty">Loading products...</div>
-            ) : error && products.length === 0 ? (
-              <div className="alert-box product-empty">{error}</div>
-            ) : visibleProducts.length === 0 ? (
-              <div className="empty-state product-empty">No products match your filters.</div>
-            ) : (
-              visibleProducts.map((product) => {
-                const meta = product.meta || getProductMeta(product);
-                const isWishlisted = wishlist.some((item) => item.id === product.id);
-                const firstImage = (product.images && product.images[0] && product.images[0].image) || product.image_url;
-                const resolvedImage = firstImage ? (firstImage.startsWith("/") ? `http://127.0.0.1:8000${firstImage}` : firstImage) : null;
-                const image =
-                  resolvedImage ||
-                  `https://placehold.co/600x600/fdf2e8/f57224?text=${encodeURIComponent(String(product.name || "Product").slice(0, 12))}`;
-
-                return (
-                  <article className="product-card" key={product.id}>
-                    <button type="button" className="product-card-image-wrap" onClick={() => handleProductClick(product)}>
-                      <img className="product-card-image" src={image} alt={product.name} />
-                    </button>
-                    <div className="product-card-body">
-                      <div className="product-card-meta">
-                        <span className="product-store">{meta.store}</span>
-                        <span className={`status-badge ${meta.badge === "In Stock" ? "status-badge--success" : meta.badge === "Low Stock" ? "status-badge--warning" : "status-badge--danger"}`}>
-                          {meta.badge}
-                        </span>
-                      </div>
-                      <button type="button" className="product-title-button" onClick={() => handleProductClick(product)}>
-                        <h4>{product.name || "Untitled product"}</h4>
-                      </button>
-                      <div className="product-rating">★ {meta.rating}</div>
-                      <p className="product-price">${Number(product.price || 0).toFixed(2)}</p>
-                      <div className="product-actions">
-                        <button
-                          type="button"
-                          className="btn btn-primary"
-                          onClick={() => onAddToCart(product)}
-                        >
-                          Add to cart
-                        </button>
-                        <button
-                          type="button"
-                          className={`btn btn-secondary${isWishlisted ? " is-active" : ""}`}
-                          onClick={() => onToggleWishlist(product)}
-                        >
-                          {isWishlisted ? "Wishlisted" : "Wishlist"}
-                        </button>
-                      </div>
-                    </div>
-                  </article>
-                );
-              })
+          <div className="mp-deals__viewport">
+            {spotlightScroll.isScrollable && spotlightScroll.canScrollLeft && (
+              <button
+                type="button"
+                className="mp-deals__arrow mp-deals__arrow--prev"
+                onClick={() => scrollSpotlight(-1)}
+                aria-label="Scroll spotlight left"
+              >
+                ←
+              </button>
             )}
+            {spotlightScroll.isScrollable && spotlightScroll.canScrollRight && (
+              <button
+                type="button"
+                className="mp-deals__arrow mp-deals__arrow--next"
+                onClick={() => scrollSpotlight(1)}
+                aria-label="Scroll spotlight right"
+              >
+                →
+              </button>
+            )}
+
+            <div className="mp-deals__track" ref={spotlightTrackRef}>
+            {spotlightProducts.map((product) => (
+              <article
+                className="mp-deal-card"
+                key={`spotlight-${product.id}`}
+                onClick={() => handleProductClick(product)}
+                onKeyDown={(e) => e.key === "Enter" && handleProductClick(product)}
+                role="button"
+                tabIndex={0}
+              >
+                <img
+                  className="mp-deal-card__image"
+                  src={resolveProductImage(product, "640x480")}
+                  alt={product.name}
+                  loading="lazy"
+                />
+                <div className="mp-deal-card__body">
+                  <span className="mp-deal-card__store">{product.meta.store}</span>
+                  <h3 className="mp-deal-card__title">{product.name}</h3>
+                  <p className="mp-deal-card__price">${Number(product.price || 0).toFixed(2)}</p>
+                </div>
+              </article>
+            ))}
+          </div>
+          </div>
+        </section>
+      )}
+
+      <section className="mp-trust" aria-label="Shopping benefits">
+        {TRUST_ITEMS.map((item) => (
+          <div className="mp-trust__item" key={item.title}>
+            <div className="mp-trust__icon">{item.icon}</div>
+            <div>
+              <strong>{item.title}</strong>
+              <span>{item.text}</span>
+            </div>
+          </div>
+        ))}
+      </section>
+
+      {uniqueCategories.length > 0 && (
+        <section className="mp-categories">
+          <div className="mp-section-head">
+            <div>
+              <h2>Shop by category</h2>
+              <p>Browse what is live across the marketplace.</p>
+            </div>
+            <span className="mp-pill">{uniqueCategories.length} categories</span>
+          </div>
+
+          <div className="mp-categories__rail">
+            <button
+              type="button"
+              className={`mp-category-chip${activeCategory === "All" ? " is-active" : ""}`}
+              onClick={() => setActiveCategory("All")}
+            >
+              All products
+            </button>
+            {uniqueCategories.map((category) => (
+              <button
+                type="button"
+                key={category}
+                className={`mp-category-chip${activeCategory === category ? " is-active" : ""}`}
+                onClick={() => setActiveCategory(category)}
+              >
+                {category}
+              </button>
+            ))}
+          </div>
+        </section>
+      )}
+
+      <section className="mp-catalog" id="catalog-section">
+        <div className="mp-toolbar">
+          <form
+            className="mp-toolbar__search"
+            onSubmit={(event) => event.preventDefault()}
+            role="search"
+          >
+            <input
+              id="catalog-search"
+              type="search"
+              placeholder="Search products, stores, or categories"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search catalog products"
+            />
+            {query.trim() ? (
+              <button
+                type="button"
+                className="mp-toolbar__clear"
+                onClick={() => setQuery("")}
+              >
+                Clear
+              </button>
+            ) : null}
+          </form>
+
+          <div className="mp-toolbar__controls">
+            <select value={sortBy} onChange={(e) => setSortBy(e.target.value)} aria-label="Sort products">
+              <option value="featured">Featured</option>
+              <option value="price-low">Price: Low to High</option>
+              <option value="price-high">Price: High to Low</option>
+              <option value="rating">Top rated</option>
+            </select>
+
+            <label className="mp-toolbar__check">
+              <input
+                type="checkbox"
+                checked={onlyInStock}
+                onChange={(e) => setOnlyInStock(e.target.checked)}
+              />
+              In stock only
+            </label>
           </div>
         </div>
+
+        {loading ? (
+          <div className="mp-skeleton-grid">
+            {Array.from({ length: 8 }).map((_, index) => (
+              <ProductSkeleton key={`skeleton-${index}`} />
+            ))}
+          </div>
+        ) : error && products.length === 0 ? (
+          <div className="mp-empty">{error}</div>
+        ) : visibleProducts.length === 0 ? (
+          <div className="mp-empty">
+            {query.trim()
+              ? `No products found for "${query.trim()}". Try another search or clear filters.`
+              : "No products match your filters."}
+          </div>
+        ) : (
+          <div className="mp-grid">
+            {visibleProducts.map((product) => {
+              const isWishlisted = wishlist.some((item) => item.id === product.id);
+
+              return (
+                <article className="mp-card" key={product.id}>
+                  <button
+                    type="button"
+                    className="mp-card__media"
+                    onClick={() => handleProductClick(product)}
+                  >
+                    <img
+                      src={resolveProductImage(product)}
+                      alt={product.name}
+                      loading="lazy"
+                    />
+                    <span className={`mp-card__badge${product.meta.stockTone === "low" ? " mp-card__badge--low" : product.meta.stockTone === "out" ? " mp-card__badge--out" : ""}`}>
+                      {product.meta.stockLabel}
+                    </span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`mp-card__wishlist${isWishlisted ? " is-active" : ""}`}
+                    onClick={() => onToggleWishlist(product)}
+                    aria-label={isWishlisted ? "Remove from wishlist" : "Add to wishlist"}
+                  >
+                    ♥
+                  </button>
+
+                  <div className="mp-card__body">
+                    <p className="mp-card__store">{product.meta.store}</p>
+                    <button
+                      type="button"
+                      className="mp-card__title"
+                      onClick={() => handleProductClick(product)}
+                    >
+                      {product.name || "Untitled product"}
+                    </button>
+
+                    <div className="mp-card__meta">
+                      <span className="mp-card__rating">★ {product.meta.rating}</span>
+                      <p className="mp-card__price">${Number(product.price || 0).toFixed(2)}</p>
+                    </div>
+
+                    <div className="mp-card__actions">
+                      <button
+                        type="button"
+                        className="btn btn-primary"
+                        onClick={() => onAddToCart(product)}
+                        disabled={product.meta.stock <= 0}
+                      >
+                        {product.meta.stock <= 0 ? "Out of stock" : "Add to cart"}
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-secondary"
+                        onClick={() => handleProductClick(product)}
+                      >
+                        View
+                      </button>
+                    </div>
+                  </div>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </section>
     </div>
   );

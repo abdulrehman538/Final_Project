@@ -1,5 +1,11 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { fetchWithAuth } from "../utils/authSession";
+import { isAdmin, normalizeRole } from "../utils/roles";
+import { normalizePhone, validateEmail, validatePhone } from "../utils/validation";
+import ModalCloseButton from "../components/ModalCloseButton";
+
+const API_BASE = process.env.REACT_APP_API_BASE_URL || "http://127.0.0.1:8000";
 
 const emptyProfile = {
   full_name: "",
@@ -10,12 +16,15 @@ const emptyProfile = {
   email: "",
   username: "",
   store_name: "",
+  business_description: "",
+  contact_phone: "",
+  terms_accepted: false,
   is_seller: false,
+  seller_status: "none",
 };
 
 function ProfilePage({ onBecomeSeller }) {
   const navigate = useNavigate();
-  const token = localStorage.getItem("accessToken");
   const [profile, setProfile] = useState(emptyProfile);
   const [addressFields, setAddressFields] = useState({
     detail: "",
@@ -27,9 +36,16 @@ function ProfilePage({ onBecomeSeller }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [sellerMode, setSellerMode] = useState(false);
-  const [sellerStoreName, setSellerStoreName] = useState("");
+  const [sellerForm, setSellerForm] = useState({
+    store_name: "",
+    business_description: "",
+    contact_phone: "",
+    terms_accepted: false,
+  });
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const isAdminUser = isAdmin(normalizeRole(localStorage.getItem("userRole")));
+  const showBecomeSellerSection = !profile.is_seller && !isAdminUser;
 
   useEffect(() => {
     const loadProfile = async () => {
@@ -37,11 +53,7 @@ function ProfilePage({ onBecomeSeller }) {
       setError("");
 
       try {
-        const response = await fetch("http://127.0.0.1:8000/api/profile/", {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
+        const response = await fetchWithAuth(`${API_BASE}/api/profile/`);
 
         if (!response.ok) {
           throw new Error("Unable to load profile");
@@ -49,9 +61,14 @@ function ProfilePage({ onBecomeSeller }) {
 
         const data = await response.json();
         setProfile((current) => ({ ...current, ...data, email: data.email || "" }));
-        setSellerStoreName(data.store_name || "");
+        setSellerForm((current) => ({
+          ...current,
+          store_name: data.store_name || "",
+          business_description: data.business_description || "",
+          contact_phone: data.contact_phone || "",
+          terms_accepted: Boolean(data.terms_accepted),
+        }));
 
-        // Try parsing address JSON
         try {
           if (data.address) {
             const parsed = JSON.parse(data.address);
@@ -63,8 +80,7 @@ function ProfilePage({ onBecomeSeller }) {
               postal_code: parsed.postal_code || "",
             });
           }
-        } catch (e) {
-          // If address is not valid JSON (e.g. legacy text), load it into address1
+        } catch {
           setAddressFields({
             detail: "",
             address1: data.address || "",
@@ -84,18 +100,41 @@ function ProfilePage({ onBecomeSeller }) {
     };
 
     loadProfile();
-  }, [token]);
+  }, []);
 
   const handleChange = (event) => {
     const { name, value } = event.target;
     setProfile((current) => ({ ...current, [name]: value }));
   };
 
+  const handleSellerFieldChange = (event) => {
+    const { name, value, type, checked } = event.target;
+    setSellerForm((current) => ({
+      ...current,
+      [name]: type === "checkbox" ? checked : value,
+    }));
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
-    setSaving(true);
     setMessage("");
     setError("");
+
+    const emailError = validateEmail(profile.email, { required: true });
+    if (emailError) {
+      setError(emailError);
+      return;
+    }
+
+    const phoneError = validatePhone(profile.phone, { required: true });
+    if (phoneError) {
+      setError(phoneError);
+      return;
+    }
+
+    setSaving(true);
+
+    const normalizedPhone = normalizePhone(profile.phone);
 
     const addressJson = JSON.stringify({
       detail: addressFields.detail,
@@ -107,15 +146,15 @@ function ProfilePage({ onBecomeSeller }) {
 
     const updatedProfile = {
       ...profile,
+      phone: normalizedPhone || profile.phone,
       address: addressJson,
     };
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/profile/", {
+      const response = await fetchWithAuth(`${API_BASE}/api/profile/`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(updatedProfile),
       });
@@ -134,11 +173,46 @@ function ProfilePage({ onBecomeSeller }) {
     }
   };
 
+  const openSellerModal = () => {
+    setSellerForm({
+      store_name: profile.store_name || "",
+      business_description: profile.business_description || "",
+      contact_phone: profile.contact_phone || "",
+      terms_accepted: Boolean(profile.terms_accepted),
+    });
+    setSellerMode(true);
+    setError("");
+    setMessage("");
+  };
+
   const handleBecomeSeller = async (event) => {
     event.preventDefault();
 
-    if (!sellerStoreName.trim()) {
+    if (!sellerForm.store_name.trim()) {
       setError("Store name is required.");
+      return;
+    }
+
+    if (!sellerForm.business_description.trim()) {
+      setError("Please tell us about your business.");
+      return;
+    }
+
+    if (!sellerForm.contact_phone.trim()) {
+      setError("Contact phone is required.");
+      return;
+    }
+
+    const contactPhoneError = validatePhone(sellerForm.contact_phone, { required: true });
+    if (contactPhoneError) {
+      setError(contactPhoneError);
+      return;
+    }
+
+    const normalizedContactPhone = normalizePhone(sellerForm.contact_phone);
+
+    if (!sellerForm.terms_accepted) {
+      setError("You must accept the terms and conditions.");
       return;
     }
 
@@ -147,15 +221,17 @@ function ProfilePage({ onBecomeSeller }) {
     setMessage("");
 
     try {
-      const response = await fetch("http://127.0.0.1:8000/api/profile/", {
+      const response = await fetchWithAuth(`${API_BASE}/api/profile/`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
           ...profile,
-          store_name: sellerStoreName,
+          store_name: sellerForm.store_name.trim(),
+          business_description: sellerForm.business_description.trim(),
+          contact_phone: normalizedContactPhone,
+          terms_accepted: true,
           is_seller: true,
         }),
       });
@@ -165,13 +241,21 @@ function ProfilePage({ onBecomeSeller }) {
       }
 
       const data = await response.json();
-      setProfile((current) => ({ ...current, ...data, store_name: sellerStoreName, is_seller: true }));
-      localStorage.setItem("sellerStoreName", sellerStoreName);
-      setMessage("You are now a seller.");
+      setProfile((current) => ({
+        ...current,
+        ...data,
+        store_name: sellerForm.store_name.trim(),
+        business_description: sellerForm.business_description.trim(),
+        contact_phone: normalizedContactPhone,
+        terms_accepted: true,
+        is_seller: false,
+        seller_status: data.seller_status || "pending",
+      }));
+      localStorage.setItem("sellerStoreName", sellerForm.store_name.trim());
+      setMessage("Your seller application was submitted. Admin review usually takes up to 1 business day.");
       if (onBecomeSeller) {
-        onBecomeSeller(sellerStoreName);
+        onBecomeSeller(sellerForm.store_name.trim());
       }
-      navigate("/products");
     } catch {
       setError("Unable to become seller right now.");
     } finally {
@@ -190,35 +274,126 @@ function ProfilePage({ onBecomeSeller }) {
         <div className="profile-panel">
           <p className="eyebrow">Profile</p>
           <h2>Manage your account details</h2>
-          <p className="subtext">Edit your contact information, bio, and public seller details.</p>
+          <p className="subtext">
+            {isAdminUser
+              ? "Edit your contact information and account details."
+              : "Edit your contact information, bio, and public seller details."}
+          </p>
 
           <div className="profile-avatar">{(profile.username || "U").slice(0, 1).toUpperCase()}</div>
 
-          {!profile.is_seller && (
+          {showBecomeSellerSection && (
             <div className="seller-upgrade-box">
               <p className="eyebrow">Want to become seller?</p>
-              <p className="subtext">Add your store name and start managing your own products.</p>
-              {!sellerMode ? (
-                <button type="button" className="btn btn-primary" onClick={() => setSellerMode(true)}>
-                  Become Seller
-                </button>
-              ) : (
-                <form className="seller-upgrade-form" onSubmit={handleBecomeSeller}>
-                  <label className="field-label">Store Name</label>
-                  <input
-                    className="field-input"
-                    type="text"
-                    placeholder="Enter store name"
-                    value={sellerStoreName}
-                    onChange={(e) => setSellerStoreName(e.target.value)}
-                  />
-                  <button type="submit" className="btn btn-primary" disabled={saving}>
-                    {saving ? "Updating..." : "Activate Seller"}
-                  </button>
-                  <button type="button" className="btn btn-secondary" onClick={() => setSellerMode(false)}>
-                    Cancel
-                  </button>
-                </form>
+              <p className="subtext">Set up your store profile and review the seller terms before you start listing products.</p>
+              {profile.seller_status === "pending" && (
+                <div className="auth-alert auth-alert-success" style={{ marginBottom: "12px" }}>
+                  Your seller application is pending admin approval.
+                </div>
+              )}
+              {profile.seller_status === "rejected" && (
+                <div className="auth-alert" style={{ marginBottom: "12px" }}>
+                  Your seller application was rejected. Please contact support for help.
+                </div>
+              )}
+              <button type="button" className="btn btn-primary" onClick={openSellerModal}>
+                Become Seller
+              </button>
+
+              {sellerMode && (
+                <div className="seller-upgrade-modal-backdrop" role="presentation">
+                  <div className="seller-upgrade-modal" role="dialog" aria-modal="true" aria-labelledby="seller-onboarding-title">
+                    <div className="seller-upgrade-modal__header">
+                      <div>
+                        <p className="eyebrow">Seller Onboarding</p>
+                        <h3 id="seller-onboarding-title">Become a seller</h3>
+                        <p className="subtext">Set up your store profile, share your business details, and accept the seller agreement in one step.</p>
+                      </div>
+                      <ModalCloseButton inline onClick={() => setSellerMode(false)} />
+                    </div>
+
+                    <div className="seller-upgrade-modal__summary">
+                      <span className="pill pill-soft">Why sellers use this</span>
+                      <ul className="seller-upgrade-benefits">
+                        <li>List and manage your own products from one dashboard.</li>
+                        <li>Show customers a clear store identity and contact details.</li>
+                        <li>Build trust with a verified seller agreement and terms.</li>
+                      </ul>
+                    </div>
+
+                    <form className="seller-upgrade-form" onSubmit={handleBecomeSeller}>
+                      <label className="field-label" htmlFor="seller-store-name">Store Name</label>
+                      <input
+                        id="seller-store-name"
+                        className="field-input"
+                        type="text"
+                        name="store_name"
+                        placeholder="Enter store name"
+                        value={sellerForm.store_name}
+                        onChange={handleSellerFieldChange}
+                      />
+
+                      <label className="field-label" htmlFor="seller-business-description">Business Description</label>
+                      <textarea
+                        id="seller-business-description"
+                        className="field-input"
+                        name="business_description"
+                        rows="4"
+                        placeholder="Tell customers what you sell and what makes your store unique"
+                        value={sellerForm.business_description}
+                        onChange={handleSellerFieldChange}
+                      />
+
+                      <label className="field-label" htmlFor="seller-contact-phone">Contact Phone</label>
+                      <input
+                        id="seller-contact-phone"
+                        className="field-input"
+                        type="tel"
+                        inputMode="numeric"
+                        maxLength={11}
+                        name="contact_phone"
+                        placeholder="e.g. 03001234567"
+                        value={sellerForm.contact_phone}
+                        onChange={handleSellerFieldChange}
+                        required
+                      />
+
+                      <div className="seller-upgrade-modal__terms">
+                        <h4>Terms and Conditions</h4>
+                        <p>
+                          By becoming a seller, you agree to provide accurate product information,
+                          honor orders promptly, and follow marketplace policies.
+                        </p>
+                        <p>
+                          <strong>Admin approval is required</strong> — you cannot list products until
+                          an admin approves your application, typically within{" "}
+                          <strong>1 business day</strong>.
+                        </p>
+                      </div>
+
+                      <label className="seller-checkbox">
+                        <input
+                          type="checkbox"
+                          name="terms_accepted"
+                          checked={sellerForm.terms_accepted}
+                          onChange={handleSellerFieldChange}
+                        />
+                        <span>
+                          I understand approval can take up to 1 business day and I agree to the terms
+                        </span>
+                      </label>
+
+                      <div className="seller-upgrade-modal__actions">
+                        <button type="submit" className="btn btn-primary" disabled={saving}>
+                          {saving ? "Updating..." : "Activate Seller"}
+                        </button>
+                        <button type="button" className="btn btn-secondary" onClick={() => setSellerMode(false)}>
+                          Cancel
+                        </button>
+                      </div>
+                    </form>
+                  </div>
+                </div>
               )}
             </div>
           )}
@@ -244,54 +419,64 @@ function ProfilePage({ onBecomeSeller }) {
           <input className="field-input" name="full_name" value={profile.full_name} onChange={handleChange} />
 
           <label className="field-label">Phone</label>
-          <input className="field-input" name="phone" value={profile.phone} onChange={handleChange} />
+          <input
+            className="field-input"
+            type="tel"
+            inputMode="numeric"
+            maxLength={11}
+            name="phone"
+            placeholder="e.g. 03001234567"
+            value={profile.phone}
+            onChange={handleChange}
+            required
+          />
 
           <label className="field-label">Address Line 1</label>
-          <input 
-            className="field-input" 
-            name="address1" 
+          <input
+            className="field-input"
+            name="address1"
             placeholder="House/Apartment No, building name"
-            value={addressFields.address1} 
-            onChange={(e) => setAddressFields(prev => ({ ...prev, address1: e.target.value }))} 
+            value={addressFields.address1}
+            onChange={(e) => setAddressFields((prev) => ({ ...prev, address1: e.target.value }))}
             required
           />
 
           <label className="field-label">Address Line 2</label>
-          <input 
-            className="field-input" 
-            name="address2" 
+          <input
+            className="field-input"
+            name="address2"
             placeholder="Street, area, colony name"
-            value={addressFields.address2} 
-            onChange={(e) => setAddressFields(prev => ({ ...prev, address2: e.target.value }))} 
+            value={addressFields.address2}
+            onChange={(e) => setAddressFields((prev) => ({ ...prev, address2: e.target.value }))}
           />
 
           <label className="field-label">Address Line 3</label>
-          <input 
-            className="field-input" 
-            name="address3" 
+          <input
+            className="field-input"
+            name="address3"
             placeholder="Landmark, city, state"
-            value={addressFields.address3} 
-            onChange={(e) => setAddressFields(prev => ({ ...prev, address3: e.target.value }))} 
+            value={addressFields.address3}
+            onChange={(e) => setAddressFields((prev) => ({ ...prev, address3: e.target.value }))}
           />
 
           <label className="field-label">Postal / Zip Code</label>
-          <input 
-            className="field-input" 
-            name="postal_code" 
+          <input
+            className="field-input"
+            name="postal_code"
             placeholder="Enter postal / zip code"
-            value={addressFields.postal_code} 
-            onChange={(e) => setAddressFields(prev => ({ ...prev, postal_code: e.target.value }))} 
+            value={addressFields.postal_code}
+            onChange={(e) => setAddressFields((prev) => ({ ...prev, postal_code: e.target.value }))}
             required
           />
 
           <label className="field-label">Detail / Special Instructions</label>
-          <textarea 
-            className="field-input" 
-            name="detail" 
+          <textarea
+            className="field-input"
+            name="detail"
             placeholder="Additional delivery details or landmark"
             rows="3"
-            value={addressFields.detail} 
-            onChange={(e) => setAddressFields(prev => ({ ...prev, detail: e.target.value }))} 
+            value={addressFields.detail}
+            onChange={(e) => setAddressFields((prev) => ({ ...prev, detail: e.target.value }))}
           />
 
           <label className="field-label">Avatar URL</label>
